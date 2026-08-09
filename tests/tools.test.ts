@@ -26,6 +26,7 @@ describe("tool surface", () => {
       [...byName.keys()].sort(),
       [
         "add_project",
+        "browser_history",
         "forget",
         "launch_app",
         "list_projects",

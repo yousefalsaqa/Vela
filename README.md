@@ -102,6 +102,102 @@ Two need a browser action that can't be scripted:
 heartbeat gets reach too, so a watch can be about a PR or a feed rather than
 only something on this machine — it's read-only either way.
 
+## Running as a service
+
+```bash
+npm run serve   # Vela in the background, keeping her session and her watches
+npm run dev     # attaches to her if she's running; otherwise runs her in-process
+```
+
+[core.ts](src/core.ts) is the brain and has no idea a terminal exists — it takes
+turns and emits events. The REPL is one renderer over that stream, voice is
+another, and both can be attached at once. Without a service running, `npm run
+dev` embeds its own core and behaves exactly as it always has.
+
+The service listens on 127.0.0.1 with a random port and a random token, both
+written to `data/server.json` (gitignored). The core runs with
+`bypassPermissions` and has the whole machine, so "only local" is not on its own
+a good enough door.
+
+[client.ts](src/client.ts) is deliberately `node:http` rather than `fetch`. With
+`fetch`, an attached REPL would connect happily and then hear nothing at all —
+the events stream never ends, and the turn behind it never got through.
+
+## Speaking
+
+```bash
+VELA_VOICE=on npm run dev
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VELA_VOICE` | `off` | `on` makes her speak her replies |
+| `VELA_VOICE_NAME` | system default | e.g. `Microsoft Zira Desktop` |
+| `VELA_VOICE_RATE` | `1` | -10 (slow) to 10 (fast) |
+
+Windows SAPI, so no install and no network. [voice.ts](src/voice.ts) speaks
+sentence by sentence as the reply streams — waiting for the whole answer would
+add its length to a latency budget that's already about a second and a half.
+`speakable()` strips what reads badly aloud: code blocks become "code block",
+links become their label, and a Windows path becomes just the filename.
+
+## Listening
+
+```bash
+VELA_LISTEN=on npm run dev
+```
+
+Push-to-talk: **Enter on an empty line starts recording, Enter again stops it**,
+and the transcript goes into the same queue a typed line would. Using the input
+that already exists beats a global-hotkey dependency, and it's deliberately not
+a wake word — "Hey Vela" means training a model on synthetic speech, which is
+worth doing only once the loop has proved itself.
+
+ffmpeg captures the microphone, `whisper-ctranslate2` transcribes it. Both were
+installed with `winget` and `uv` respectively; a few seconds of speech
+transcribes in about 1.5s on CPU.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VELA_LISTEN` | `off` | `on` enables push-to-talk |
+| `VELA_MIC` | first microphone | Part of the DirectShow device name |
+| `VELA_WHISPER_MODEL` | `base.en` | `tiny.en` … `small.en`; bigger is slower, better |
+| `VELA_WHISPER_DEVICE` | `cpu` | `cuda` needs the CUDA runtime |
+| `VELA_FFMPEG` | `ffmpeg` | Full path, until a shell restart puts it on PATH |
+
+`cleanTranscript()` exists because whisper hallucinates: given a second of room
+tone it confidently returns "You." or "Thank you.", and a stray Enter shouldn't
+send a phantom turn. Real speech that happens to start with "thanks" survives —
+there's a test for exactly that.
+
+**CPU is the default on purpose.** The CUDA runtime is installed (cuBLAS 12.9 and
+cuDNN 9.24, as pip wheels inside whisper's own venv rather than the 3GB toolkit),
+and `VELA_WHISPER_DEVICE=cuda` works. It just doesn't help, measured on a
+three-second clip:
+
+| | GPU (warm) | CPU |
+|---|---|---|
+| `base.en` | 1.31s | 1.26s |
+| `small.en` | 2.17s | 2.51s |
+
+At push-to-talk lengths the time is process startup and model loading, not
+inference, so the GPU never gets to matter. The first CUDA run took 21.7s — an
+RTX 5060 is Blackwell (`sm_120`), newer than CTranslate2's prebuilt kernels, so
+it JIT-compiled them once and cached them. Worth revisiting only for long
+recordings or a much bigger model.
+
+## Browser history
+
+[history.ts](src/history.ts) reads Chrome, Edge and Brave history — all SQLite,
+so `node:sqlite` handles it with no new dependency. That's what makes "open the
+Meet I joined yesterday" work: search history, then `launch_app` the result.
+Read-only, entirely local, and the live file is copied first because the browser
+holds a lock on it.
+
+Chrome stores timestamps as microseconds since 1601, which run past 2^53 —
+`node:sqlite` refuses to return an integer it can't represent exactly, so the
+query casts to a float. Real history hits this; a small fixture wouldn't.
+
 ## Tests
 
 ```bash
@@ -123,13 +219,20 @@ That one does call the model (~12s, real tokens). It exists because nothing
 else checks the thing most likely to drift: whether the model actually honours
 the `SILENT` / `#id done:` reply contract that `parseReply` is built around.
 
-**What isn't covered, on purpose.** Exactly six functions, all of them sitting
-on a process boundary: `ps` (spawns PowerShell), `askModel` (calls the SDK), the
-real `isProcessRunning` probe, and the `launch_app` / `media_control` /
-`list_windows` tool handlers, which would really open applications and press
-media keys if invoked. The logic behind each is tested through an injected fake;
-only the last inch isn't. That's the whole gap — if function coverage drops
-below 90%, something else went untested.
+**What isn't covered, on purpose** — everything that spawns something:
+
+| | why |
+|---|---|
+| `ps`, `isProcessRunning` | spawn PowerShell |
+| `askModel` | calls the SDK |
+| `windowsSpeaker` | holds a live speech synthesiser |
+| `startRecording`, `transcribe`, `audioDevices` | drive ffmpeg and whisper |
+| `launch_app`, `media_control`, `list_windows` handlers | would really open apps and press media keys |
+
+The logic behind each is tested through an injected fake; only the last inch
+isn't. The speech chain is covered end to end in `tests/live` instead, where
+Vela speaks a known sentence to a wav and transcribes it back — no human
+needed, and it catches whisper being missing or on the wrong device.
 
 The one exception is `fs.watch`, which is exercised for real against a temp
 file in [tests/triggers.test.ts](tests/triggers.test.ts) — Windows has enough

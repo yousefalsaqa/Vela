@@ -12,6 +12,7 @@ import {
   type MemoryKind,
 } from "./memory.js";
 import { launchApp, mediaKey, listRunningApps } from "./desktop.js";
+import { searchHistory, ago } from "./history.js";
 
 const text = (body: string) => ({
   content: [{ type: "text" as const, text: body }],
@@ -136,6 +137,41 @@ export const velaToolDefs = [
         "seeing what Yousef is working on right now.",
       {},
       async () => text(await listRunningApps()),
+    ),
+
+    tool(
+      "browser_history",
+      "Search what Yousef has had open in Chrome, Edge or Brave. Use this " +
+        "whenever he refers to something he was looking at — 'that Meet call I " +
+        "joined', 'the article from yesterday' — then open the result with " +
+        "launch_app. Searches page titles and URLs.",
+      {
+        query: z
+          .string()
+          .describe(
+            "Words from the page title or URL, e.g. 'meet.google.com' or 'capstone'. Empty for whatever is most recent.",
+          ),
+        since_days: z
+          .number()
+          .optional()
+          .describe("Only visits in the last N days. Omit for all history."),
+        limit: z.number().optional().describe("How many to return. Default 20."),
+      },
+      async (args) => {
+        const found = searchHistory(args.query, {
+          sinceDays: args.since_days,
+          limit: args.limit,
+        });
+        if (!found.length) return text("Nothing in browser history matches that.");
+        return text(
+          found
+            .map(
+              (v) =>
+                `${v.title}\n    ${v.url}\n    ${ago(v.lastVisit)}, ${v.visits} visit${v.visits === 1 ? "" : "s"} (${v.browser})`,
+            )
+            .join("\n"),
+        );
+      },
     ),
 
     tool(

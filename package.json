@@ -6,10 +6,11 @@
   "scripts": {
     "test": "node --import tsx --test \"tests/*.test.ts\"",
     "test:watch": "node --import tsx --test --watch \"tests/*.test.ts\"",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-exclude=\"tests/**\" --test-coverage-exclude=\"src/index.ts\" --test-coverage-lines=96 --test-coverage-functions=90 --test-coverage-branches=95 \"tests/*.test.ts\"",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-exclude=\"tests/**\" --test-coverage-exclude=\"src/index.ts\" --test-coverage-lines=94 --test-coverage-functions=88 --test-coverage-branches=92 \"tests/*.test.ts\"",
     "test:live": "node --import tsx --test \"tests/live/*.test.ts\"",
     "check": "npm run typecheck && npm test",
     "dev": "tsx src/index.ts",
+    "serve": "tsx src/serve.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
