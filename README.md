@@ -35,6 +35,41 @@ Added here (`src/tools.ts`):
 | `list_windows` | See what's currently open |
 | `watch` / `list_watches` / `resolve_watch` | Keep an eye on something and speak up when it changes |
 
+## Memory is an Obsidian vault
+
+What she knows about Yousef lives in `vault/Memory` as one markdown note per
+fact, not as rows. A SQLite row is a fine place to put a fact and a terrible
+place to read one. As notes he can open the vault, see everything she believes
+about him, correct what's wrong, and link facts together, and she reads the
+edit back on the next recall.
+
+```
+vault/Memory/
+  yousef-graduated-basc-mechatronics-robotics-engineering.md
+  yousef-has-used-typescript-for-his.md
+  fabrication-is-aspirational-as-of-aug.md
+```
+
+Notes are named after the sentence rather than an id, because that name is
+what Obsidian links with. Frontmatter carries `kind`, `tags` and the dates, and
+any key it doesn't recognise is written back untouched, so a plugin's metadata
+survives her next write. Notes he writes by hand with no frontmatter at all are
+read as plain facts.
+
+Projects and watches stay in SQLite. They're operational state, and `last_spoke`
+churning every few minutes would make the vault noisy for no reading benefit.
+An older database is drained into the vault on first open; the table is emptied
+as it goes, so it happens once.
+
+Two vaults are registered with Obsidian: `Desktop\Vela\vault` on its own, and
+`Desktop\Vault`, which holds directory junctions to both Vela's notes and
+Claude Code's own memory folder so the whole graph is browsable in one place.
+`vault/` is gitignored, since this repo is public and the notes are about him.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VELA_VAULT` | `<repo>/vault` | Vault root; notes go in its `Memory` folder |
+
 ## Speaking up on its own
 
 Ask it to tell you when something happens — "let me know when the fantasy build
@@ -165,6 +200,28 @@ add its length to a latency budget that's already about a second and a half.
 `speakable()` strips what reads badly aloud: code blocks become "code block",
 links become their label, and a Windows path becomes just the filename.
 
+**One player, not one per sentence.** Spawning a player per utterance costs
+~450ms of process start and audio-device open, and that lands as a gap of
+silence between every sentence — which is what made her sound hesitant rather
+than slow. `pcmPlayer()` keeps a single ffplay reading raw samples off a pipe
+for the whole conversation. Measured over a four-sentence reply:
+
+| | Player per sentence | One player |
+|---|---|---|
+| Dead air, 4 sentences | ~1.9s | ~0.6s, nearly all of it the one startup |
+
+Handing samples to it returns immediately, so the next sentence is synthesised
+while the current one is still playing instead of after it. That's the other
+~500ms a sentence.
+
+**She's told when she's being heard.** Speech is not writing: a paragraph he'd
+skim in two seconds takes twenty to say, and he can't skip the middle. With
+`VELA_VOICE=on` the persona gains [a section](src/config.ts) that caps replies
+at a sentence or two and bans the running commentary — "let me check X", pause,
+"now let me look at Y" — which was most of what made her feel slow, since each
+of those lines is a synthesis, a playback, and then silence while the tool
+actually runs.
+
 ## Listening
 
 ```bash
@@ -177,9 +234,22 @@ that already exists beats a global-hotkey dependency, and it's deliberately not
 a wake word — "Hey Vela" means training a model on synthetic speech, which is
 worth doing only once the loop has proved itself.
 
-ffmpeg captures the microphone, `whisper-ctranslate2` transcribes it. Both were
-installed with `winget` and `uv` respectively; a few seconds of speech
-transcribes in about 1.5s on CPU.
+ffmpeg captures the microphone and whisper transcribes it. Both were installed
+with `winget` and `uv` respectively.
+
+**Nothing waits for a file.** ffmpeg writes raw samples down a pipe rather than
+a wav on disk, so stopping is immediate — there's no header to finalise, and
+none of the 1.2s that dshow takes to close the capture device politely. A [warm
+worker](scripts/whisper_worker.py) then holds the model, the same way Kokoro's
+does, instead of reloading it per utterance:
+
+| Six seconds of speech | Cold CLI, per utterance | Warm worker |
+|---|---|---|
+| `base.en`, CPU | ~1.4s | ~0.4s |
+
+The worker needs a Python that can import `faster_whisper`; `uv tool install
+whisper-ctranslate2` leaves one behind, which is the default path below. If it
+isn't there, transcription silently falls back to the CLI and pays the reload.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -187,7 +257,35 @@ transcribes in about 1.5s on CPU.
 | `VELA_MIC` | first microphone | Part of the DirectShow device name |
 | `VELA_WHISPER_MODEL` | `base.en` | `tiny.en` … `small.en`; bigger is slower, better |
 | `VELA_WHISPER_DEVICE` | `cpu` | `cuda` needs the CUDA runtime |
+| `VELA_WHISPER_PYTHON` | whisper's uv venv | A Python that can import `faster_whisper` |
+| `VELA_WHISPER_VOCABULARY` | his names and tools | Words to bias the decoder towards |
+| `VELA_KEEP_AUDIO` | `off` | `on` saves every recording to `data/heard` next to its transcript |
+
+**When she mishears, `VELA_KEEP_AUDIO=on` says which half is at fault.** Bad
+audio (clipped at the front, too quiet, too much room) and a bad transcription
+of good audio need opposite fixes, and the wav sitting next to the text it
+produced settles it without another round trip.
 | `VELA_FFMPEG` | `ffmpeg` | Full path, until a shell restart puts it on PATH |
+
+**It waits for the microphone before saying "listening".** dshow takes about
+1.3s to open the device, and anything said before that is not quiet, it does
+not exist. The first word or two of a sentence would vanish and whisper would
+be left guessing at a fragment, which is the single biggest cause of it
+mishearing him.
+
+**Telling it his own words beats a bigger model.** Measured over five sentences
+of his actual vocabulary:
+
+| | word error | cost |
+|---|---|---|
+| `base.en`, beam 1 | 12.2% | 382ms |
+| `base.en`, beam 5 | 9.8% | 391ms |
+| **`base.en`, beam 5 + vocabulary** | **7.3%** | **408ms** |
+| `small.en`, beam 1 | 7.3% | 1140ms |
+
+`VELA_WHISPER_VOCABULARY` is fed to whisper as an `initial_prompt`. It buys the
+same accuracy as a model three times the size, for 26ms. Add a word to it any
+time she mangles a name.
 
 `cleanTranscript()` exists because whisper hallucinates: given a second of room
 tone it confidently returns "You." or "Thank you.", and a stray Enter shouldn't
@@ -243,20 +341,31 @@ That one does call the model (~12s, real tokens). It exists because nothing
 else checks the thing most likely to drift: whether the model actually honours
 the `SILENT` / `#id done:` reply contract that `parseReply` is built around.
 
-**What isn't covered, on purpose** — everything that spawns something:
+**Everything that spawns is tested through the seam, not around it.**
+[proc.ts](src/proc.ts) is the one place the app touches the operating system,
+and everything that speaks, listens or drives the desktop takes its `Spawner`
+as an argument. A test hands over a child process that never existed, then
+drives both sides of it: what Vela wrote, and what it says back. That leaves
+the parts most likely to break actually covered — the line protocol she talks
+to her workers over, the queueing that stops two sentences playing at once, a
+worker that reports success and writes nothing, and a player that won't start.
+
+`proc.ts` itself is excluded from the coverage gate, along with `index.ts`. It
+is six lines of delegation with no logic in it; testing the call itself is what
+`tests/live` is for.
+
+**What genuinely isn't covered, on purpose:**
 
 | | why |
 |---|---|
-| `ps`, `isProcessRunning` | spawn PowerShell |
+| `ps`, `isProcessRunning` | spawn PowerShell directly |
 | `askModel` | calls the SDK |
-| `windowsSpeaker` | holds a live speech synthesiser |
-| `startRecording`, `transcribe`, `audioDevices` | drive ffmpeg and whisper |
 | `launch_app`, `media_control`, `list_windows` handlers | would really open apps and press media keys |
 
-The logic behind each is tested through an injected fake; only the last inch
-isn't. The speech chain is covered end to end in `tests/live` instead, where
-Vela speaks a known sentence to a wav and transcribes it back — no human
-needed, and it catches whisper being missing or on the wrong device.
+The speech chain is covered end to end in `tests/live` instead, where Vela
+speaks a known sentence to a wav and transcribes it back through both the
+warm worker and the CLI — no human needed, and it catches whisper being
+missing or on the wrong device.
 
 The one exception is `fs.watch`, which is exercised for real against a temp
 file in [tests/triggers.test.ts](tests/triggers.test.ts) — Windows has enough
@@ -358,3 +467,20 @@ rather than depending on the model remembering to call `resolve_watch`.
    as its own tool module.
 3. More trigger kinds — a window title appearing, an HTTP endpoint changing
    shape. The `file` and `process` pair covers most of what's wanted so far.
+
+## Versions
+
+The version in `package.json` is read at startup and printed with the commit
+under it, so `Vela 1.3.0 (c5e439d)` in the banner says exactly what is running.
+She's told her own version too, which is what she answers with when asked.
+
+The minor number goes up when she gains a sense or a limb; the patch when
+something that was broken isn't. It stayed at 1.0.0 for three releases because
+nothing read it, so if you add to this list, bump it.
+
+| Version | What she gained |
+| --- | --- |
+| 1.0.0 | Hands: files, shell, the Windows desktop, durable memory, an ambient heartbeat with watches. |
+| 1.1.0 | The core split out of the terminal, so she survives the window closing. Service mode, edge-tts speech, push-to-talk. |
+| 1.2.0 | A Kokoro voice worth listening to, one player for the whole conversation, and his name said right. |
+| 1.3.0 | Whisper kept warm instead of reloaded per utterance, memory as an Obsidian vault, and the spoken turn cut down to where it feels live. |

@@ -1,4 +1,4 @@
-import { test, describe, beforeEach } from "node:test";
+import { test, describe, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createStore,
+  migrateMemoriesToVault,
   dbPath,
   store as defaultStore,
   close as closeDefault,
@@ -22,29 +23,55 @@ import {
   buildContextBlock as buildContextBlockDefault,
   type Store,
 } from "../src/memory.js";
+import { createVault } from "../src/vault.js";
+
+/**
+ * A throwaway vault per test. Memories are markdown notes now, so a store
+ * built without one would write into the real vault on this machine.
+ */
+const vaults: string[] = [];
+const scratchVault = () => {
+  const dir = mkdtempSync(join(tmpdir(), "vela-vault-"));
+  vaults.push(dir);
+  return createVault(dir, () => "2026-08-10");
+};
+after(() => {
+  for (const dir of vaults) rmSync(dir, { recursive: true, force: true });
+});
 
 let s: Store;
 beforeEach(() => {
-  s = createStore(":memory:");
+  s = createStore(":memory:", scratchVault());
 });
 
 describe("remember / recall / forget", () => {
-  test("stores a fact and hands back its id", () => {
-    assert.equal(s.remember("fact", "Yousef is at Queen's."), "Saved memory #1.");
-    assert.equal(s.recall()[0].content, "Yousef is at Queen's.");
+  test("stores a fact as a note named after it", () => {
+    // The name is what he'll see in Obsidian and what links point at, so it
+    // has to be the sentence rather than a number.
+    assert.equal(
+      s.remember("fact", "Yousef is at Queen's."),
+      "Saved [[yousef-is-at-queen-s]].",
+    );
+    assert.equal(s.recall()[0].body, "Yousef is at Queen's.");
   });
 
   test("re-saving the same fact updates it instead of duplicating", () => {
     s.remember("fact", "He prefers Python.", ["lang"]);
     assert.equal(
       s.remember("preference", "He prefers Python.", ["lang", "style"]),
-      "Saved memory #1.",
-      "same content must keep the same id",
+      "Saved [[he-prefers-python]].",
+      "same content must land on the same note",
     );
     const rows = s.recall();
     assert.equal(rows.length, 1);
     assert.equal(rows[0].kind, "preference");
-    assert.equal(rows[0].tags, "lang,style");
+    assert.deepEqual(rows[0].tags, ["lang", "style"]);
+  });
+
+  test("a different fact that opens the same way gets its own note", () => {
+    s.remember("fact", "He prefers Python for scripting.");
+    s.remember("fact", "He prefers Python for everything else too.");
+    assert.equal(s.recall().length, 2, "one must not overwrite the other");
   });
 
   test("searches content and tags alike", () => {
@@ -69,8 +96,8 @@ describe("remember / recall / forget", () => {
 
   test("forgets a real memory and says so when there isn't one", () => {
     s.remember("fact", "Temporary.");
-    assert.equal(s.forget(1), "Deleted memory #1.");
-    assert.equal(s.forget(1), "No memory #1.");
+    assert.equal(s.forget("temporary"), "Deleted temporary.");
+    assert.equal(s.forget("temporary"), "No memory called temporary.");
     assert.deepEqual(s.recall(), []);
   });
 });
@@ -278,11 +305,70 @@ describe("createStore", () => {
   });
 });
 
+describe("migrating memories out of the old table", () => {
+  /** A store holding rows written the way the pre-vault schema wrote them. */
+  const legacy = (rows: [string, string, string][]) => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`CREATE TABLE memory (
+       id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+       content TEXT NOT NULL UNIQUE, tags TEXT NOT NULL DEFAULT '',
+       created_at TEXT, updated_at TEXT)`);
+    for (const [kind, content, tags] of rows) {
+      db.prepare(`INSERT INTO memory (kind, content, tags) VALUES (?, ?, ?)`)
+        .run(kind, content, tags);
+    }
+    return db;
+  };
+
+  test("turns every old row into a note", () => {
+    const db = legacy([
+      ["fact", "Owns a Civic.", "car"],
+      ["preference", "Prefers Python.", "language,python"],
+    ]);
+    const vault = scratchVault();
+
+    assert.equal(migrateMemoriesToVault(db, vault), 2);
+    assert.deepEqual(
+      vault.all().map((n) => n.name).sort(),
+      ["owns-a-civic", "prefers-python"],
+    );
+    assert.deepEqual(vault.recall("Python")[0].tags, ["language", "python"]);
+    db.close();
+  });
+
+  test("empties the table, so a second run has nothing to do", () => {
+    const db = legacy([["fact", "Owns a Civic.", "car"]]);
+    const vault = scratchVault();
+
+    migrateMemoriesToVault(db, vault);
+    assert.equal(
+      migrateMemoriesToVault(db, vault),
+      0,
+      "a second copy of every memory on every start would be the bug here",
+    );
+    assert.equal(vault.all().length, 1);
+    db.close();
+  });
+
+  test("carries across a row that had no tags", () => {
+    const db = legacy([["fact", "Untagged.", ""]]);
+    const vault = scratchVault();
+    migrateMemoriesToVault(db, vault);
+
+    assert.deepEqual(vault.all()[0].tags, []);
+    db.close();
+  });
+});
+
 describe("the assistant's own store", () => {
   // Every test in this file runs in its own process, so pointing the default
-  // store at :memory: here can't touch the real data/vela.db.
+  // store at :memory: and a scratch vault here can't touch the real
+  // data/vela.db or the real notes.
   beforeEach(() => {
     process.env.VELA_DB = ":memory:";
+    const dir = mkdtempSync(join(tmpdir(), "vela-vault-default-"));
+    vaults.push(dir);
+    process.env.VELA_VAULT = dir;
     closeDefault();
   });
 
@@ -308,13 +394,13 @@ describe("the assistant's own store", () => {
   // assert on the effect, so only the correct method satisfies them.
   test("remember and recall delegate", () => {
     rememberDefault("fact", "routed through the default store");
-    assert.equal(recallDefault()[0].content, "routed through the default store");
+    assert.equal(recallDefault()[0].body, "routed through the default store");
   });
 
   test("forget delegates", () => {
     rememberDefault("fact", "briefly true");
-    const id = recallDefault("briefly")[0].id;
-    assert.equal(forgetDefault(id), `Deleted memory #${id}.`);
+    const name = recallDefault("briefly")[0].name;
+    assert.equal(forgetDefault(name), `Deleted ${name}.`);
     assert.deepEqual(recallDefault("briefly"), []);
   });
 

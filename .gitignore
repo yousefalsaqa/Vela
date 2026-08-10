@@ -1,7 +1,10 @@
 node_modules/
 data/
+# What she remembers about him. Personal, and the repo is public.
+vault/
 *.db
 *.db-wal
 *.db-shm
 .env
 coverage.info
+__pycache__/

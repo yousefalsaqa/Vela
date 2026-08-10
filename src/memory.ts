@@ -1,17 +1,30 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createVault, type Note, type Vault } from "./vault.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DB = resolve(here, "../data/vela.db");
+const DEFAULT_VAULT = resolve(here, "../vault");
 
 /** Where the assistant's own database lives. `VELA_DB` overrides it. */
 export const dbPath = (): string => process.env.VELA_DB ?? DEFAULT_DB;
 
+/**
+ * The Obsidian vault holding what she remembers. `VELA_VAULT` overrides it.
+ * Notes go in a Memory subfolder so the vault root stays free for his own.
+ */
+export const vaultPath = (): string =>
+  join(process.env.VELA_VAULT ?? DEFAULT_VAULT, "Memory");
+
 const SCHEMA = `
   PRAGMA journal_mode = WAL;
 
+  -- Memories used to live here. They're markdown notes in the vault now, so
+  -- he can read and correct them; the table stays only so an existing
+  -- database can still be migrated out of. See migrateMemoriesToVault.
   CREATE TABLE IF NOT EXISTS memory (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     kind       TEXT NOT NULL,
@@ -20,8 +33,6 @@ const SCHEMA = `
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
-
-  CREATE INDEX IF NOT EXISTS memory_kind_idx ON memory(kind);
 
   CREATE TABLE IF NOT EXISTS project (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,13 +60,8 @@ const SCHEMA = `
 
 export type MemoryKind = "preference" | "project" | "fact" | "reference";
 
-export interface MemoryRow {
-  id: number;
-  kind: string;
-  content: string;
-  tags: string;
-  updated_at: string;
-}
+/** A memory is a note now; its filename is its identity. */
+export type MemoryRow = Note;
 
 export interface ProjectRow {
   id: number;
@@ -93,11 +99,23 @@ export interface WatchRow {
  * throwaway `:memory:` store and the running assistant can hold the real one,
  * without either knowing about the other.
  */
-export function createStore(path: string = dbPath()) {
+export function createStore(
+  path: string = dbPath(),
+  // A throwaway database gets a throwaway vault. Otherwise `createStore(":memory:")`
+  // reads as isolated while quietly writing notes into his real one.
+  vault: Vault = createVault(
+    path === ":memory:"
+      ? mkdtempSync(join(tmpdir(), "vela-scratch-vault-"))
+      : vaultPath(),
+  ),
+) {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
 
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+
+  // Anything left in the old table becomes a note the first time she runs.
+  migrateMemoriesToVault(db, vault);
 
   // CREATE TABLE IF NOT EXISTS leaves an older database alone, so columns
   // added after the fact have to be applied by hand.
@@ -113,48 +131,13 @@ export function createStore(path: string = dbPath()) {
     if (!columns.has(name)) db.exec(ddl);
   }
 
-  function remember(
-    kind: MemoryKind,
-    content: string,
-    tags: string[] = [],
-  ): string {
-    // content is UNIQUE, so an upsert keeps memory from filling with duplicates.
-    db.prepare(
-      `INSERT INTO memory (kind, content, tags) VALUES (?, ?, ?)
-       ON CONFLICT(content) DO UPDATE SET
-         kind = excluded.kind,
-         tags = excluded.tags,
-         updated_at = datetime('now')`,
-    ).run(kind, content, tags.join(","));
+  const remember = (kind: MemoryKind, content: string, tags: string[] = []) =>
+    vault.remember(kind, content, tags);
 
-    const row = db
-      .prepare(`SELECT id FROM memory WHERE content = ?`)
-      .get(content) as { id: number };
-    return `Saved memory #${row.id}.`;
-  }
+  const recall = (query?: string, kind?: MemoryKind): MemoryRow[] =>
+    vault.recall(query, kind);
 
-  function recall(query?: string, kind?: MemoryKind): MemoryRow[] {
-    const where: string[] = [];
-    const params: unknown[] = [];
-    if (kind) {
-      where.push("kind = ?");
-      params.push(kind);
-    }
-    if (query) {
-      where.push("(content LIKE ? OR tags LIKE ?)");
-      params.push(`%${query}%`, `%${query}%`);
-    }
-    const sql =
-      `SELECT id, kind, content, tags, updated_at FROM memory` +
-      (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
-      ` ORDER BY updated_at DESC, id DESC LIMIT 40`;
-    return db.prepare(sql).all(...(params as never[])) as unknown as MemoryRow[];
-  }
-
-  function forget(id: number): string {
-    const info = db.prepare(`DELETE FROM memory WHERE id = ?`).run(id);
-    return info.changes ? `Deleted memory #${id}.` : `No memory #${id}.`;
-  }
+  const forget = (name: string): string => vault.forget(name);
 
   function listProjects(): ProjectRow[] {
     return db
@@ -229,18 +212,14 @@ export function createStore(path: string = dbPath()) {
    * Kept deliberately small — it rides along on every single request.
    */
   function buildContextBlock(): string {
-    const memories = db
-      .prepare(
-        `SELECT kind, content FROM memory ORDER BY updated_at DESC, id DESC LIMIT 30`,
-      )
-      .all() as unknown as { kind: string; content: string }[];
+    const memories = vault.recall().slice(0, 30);
 
     const parts: string[] = [];
 
     if (memories.length) {
       parts.push(
         "## What you know about Yousef\n" +
-          memories.map((m) => `- [${m.kind}] ${m.content}`).join("\n"),
+          memories.map((m) => `- [${m.kind}] ${m.body}`).join("\n"),
       );
     }
 
@@ -269,6 +248,7 @@ export function createStore(path: string = dbPath()) {
 
   return {
     db,
+    vault,
     remember,
     recall,
     forget,
@@ -282,6 +262,30 @@ export function createStore(path: string = dbPath()) {
     buildContextBlock,
     close: () => db.close(),
   };
+}
+
+/**
+ * Carry an old database's memories over into the vault, once. Rows are deleted
+ * as they're written, so this is a no-op on every run after the first and the
+ * table drains rather than growing a second copy of everything.
+ */
+export function migrateMemoriesToVault(
+  db: DatabaseSync,
+  vault: Vault,
+): number {
+  const rows = db
+    .prepare(`SELECT id, kind, content, tags FROM memory ORDER BY id`)
+    .all() as unknown as { id: number; kind: string; content: string; tags: string }[];
+
+  for (const row of rows) {
+    vault.remember(
+      row.kind,
+      row.content,
+      row.tags ? row.tags.split(",").filter(Boolean) : [],
+    );
+    db.prepare(`DELETE FROM memory WHERE id = ?`).run(row.id);
+  }
+  return rows.length;
 }
 
 export type Store = ReturnType<typeof createStore>;

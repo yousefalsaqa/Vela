@@ -1,8 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { type ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { q } from "./desktop.js";
+import { spawn as realSpawn, type Spawner } from "./proc.js";
 
 /**
  * Vela out loud — a second listener on the core, not a rewrite of it.
@@ -66,6 +67,15 @@ export function speakable(
   return out;
 }
 
+/** A sentence that has landed: a word, then its punctuation, then nothing. */
+const COMPLETE = /\w[.!?]+["')\]]?$/;
+
+/**
+ * A full stop that something is going to follow — a decimal point, a list
+ * marker, an abbreviation. Only "." is ambiguous this way; "!" and "?" aren't.
+ */
+const KEEPS_GOING = /(?:\d|\b(?:mr|mrs|ms|dr|st|vs|etc|e\.g|i\.e))\.$/i;
+
 /**
  * Pull complete sentences off the front of a streaming buffer, leaving any
  * partial one behind. `flush` takes whatever is left, at end of turn.
@@ -88,6 +98,20 @@ export function sentences(
     const piece = rest.slice(0, end).trim();
     if (piece) ready.push(piece);
     rest = rest.slice(end);
+  }
+
+  // The last sentence of a reply has no space after its full stop, so the rule
+  // above never fires on it and it waits for flush() at the end of the turn.
+  // When she's being listened to the reply is usually one sentence long, which
+  // made that the whole reply: nothing was said out loud until the turn was
+  // completely finished, and then synthesis started from cold. Take a trailing
+  // sentence as done — unless it's mid-code-fence, where a line ending in a
+  // full stop is not a sentence at all.
+  const tail = rest.trim();
+  const insideFence = ((rest.match(/```/g)?.length ?? 0) % 2) === 1;
+  if (!flush && !insideFence && COMPLETE.test(tail) && !KEEPS_GOING.test(tail)) {
+    ready.push(tail);
+    rest = "";
   }
 
   if (flush && rest.trim()) {
@@ -121,7 +145,11 @@ export interface Voice {
  * One long-lived PowerShell holding a speech synthesiser. Spawning one per
  * utterance costs ~300ms of process start before a word is heard.
  */
-export function windowsSpeaker(voiceName?: string, rate = 1): SpeakerHandle {
+export function windowsSpeaker(
+  voiceName?: string,
+  rate = 1,
+  spawn: Spawner = realSpawn,
+): SpeakerHandle {
   let ps: ChildProcess | null = spawn(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", "-"],
@@ -165,6 +193,7 @@ export function neuralSpeaker(
   rate = 12,
   pitch = -8,
   bin = { tts: "edge-tts", play: "ffplay" },
+  spawn: Spawner = realSpawn,
 ): SpeakerHandle {
   const dir = mkdtempSync(join(tmpdir(), "vela-speech-"));
   let queue: Promise<void> = Promise.resolve();
@@ -252,10 +281,121 @@ export function neuralSpeaker(
 }
 
 /**
+ * The audio payload of a RIFF wav.
+ *
+ * The header is very nearly always 44 bytes, and slicing that off blindly
+ * works right up until the writer emits a LIST chunk first — at which point
+ * its own metadata gets played as a burst of noise. Walk the chunks instead.
+ */
+export function pcmFromWav(buffer: Buffer): Buffer | null {
+  const ascii = (at: number) => buffer.toString("ascii", at, at + 4);
+  if (buffer.length < 12 || ascii(0) !== "RIFF" || ascii(8) !== "WAVE") return null;
+
+  let at = 12;
+  while (at + 8 <= buffer.length) {
+    const size = buffer.readUInt32LE(at + 4);
+    const body = at + 8;
+    if (ascii(at) === "data") {
+      return buffer.subarray(body, Math.min(body + size, buffer.length));
+    }
+    // Chunks are word-aligned; an odd size is followed by a pad byte.
+    at = body + size + (size % 2);
+  }
+  return null;
+}
+
+export interface PcmPlayer {
+  /** Queue raw signed 16-bit mono samples. Returns as soon as they're handed over. */
+  write: (pcm: Buffer) => void;
+  /** Close the stream and wait for the tail to finish playing. */
+  drain: (timeoutMs?: number) => Promise<void>;
+  stop: () => void;
+}
+
+/**
+ * One player for the whole conversation, fed raw samples down a pipe.
+ *
+ * Spawning a player per sentence costs about 450ms each time — process start,
+ * then opening the audio device — and that lands as a gap of silence between
+ * every sentence she says. Measured over a four-sentence reply: ~1.9s of dead
+ * air with a player per sentence, ~0.6s with one player, nearly all of it the
+ * single startup.
+ *
+ * The second benefit is pipelining. Writing samples returns immediately, so
+ * the next sentence is being synthesised while this one is still being played
+ * out of the player's own buffer, instead of after it.
+ */
+export function pcmPlayer(opts: {
+  play?: string;
+  sampleRate?: number;
+  onProblem?: (why: string) => void;
+  spawn?: Spawner;
+}): PcmPlayer {
+  const spawn = opts.spawn ?? realSpawn;
+  const bin = opts.play ?? "ffplay";
+  const rate = opts.sampleRate ?? 24_000;
+  let proc: ChildProcess | null = null;
+  let closed: Promise<void> = Promise.resolve();
+  let stopped = false;
+
+  const start = (): ChildProcess => {
+    const p = spawn(
+      bin,
+      [
+        "-nodisp",
+        "-autoexit",
+        "-loglevel", "quiet",
+        "-f", "s16le",
+        "-ar", String(rate),
+        // ffplay 9 dropped -ac in favour of -ch_layout.
+        "-ch_layout", "mono",
+        "-i", "pipe:0",
+      ],
+      { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] },
+    );
+    p.on("error", (err) => {
+      proc = null;
+      opts.onProblem?.(`couldn't run ${bin}: ${err.message}`);
+    });
+    // A player that dies mid-sentence must not take the assistant with it.
+    p.stdin?.on("error", () => {});
+    closed = new Promise<void>((done) => p.on("close", () => done()));
+    proc = p;
+    return p;
+  };
+
+  return {
+    write(pcm: Buffer) {
+      if (stopped || !pcm.length) return;
+      (proc ?? start()).stdin?.write(pcm);
+    },
+
+    async drain(timeoutMs = 30_000) {
+      const p = proc;
+      if (!p) return;
+      // Closing the pipe is what tells the player it has reached the end, so
+      // the next thing said gets a fresh one.
+      proc = null;
+      p.stdin?.end();
+      await Promise.race([
+        closed,
+        new Promise((r) => setTimeout(r, timeoutMs).unref?.()),
+      ]);
+    },
+
+    stop() {
+      stopped = true;
+      proc?.kill();
+      proc = null;
+    },
+  };
+}
+
+/**
  * Kokoro, running locally. Offline, no per-sentence network call, and it
  * doesn't have the over-articulated cadence that gives the cloud voices away.
  *
- * The model costs ~1.2s to load and ~1.5s per sentence, so the worker stays
+ * The model costs ~1.2s to load and ~0.5s per sentence, so the worker stays
  * warm — about 1GB resident while speech is on, and nothing when it isn't.
  */
 export function kokoroSpeaker(opts: {
@@ -265,11 +405,13 @@ export function kokoroSpeaker(opts: {
   speed?: number;
   play?: string;
   onProblem?: (why: string) => void;
+  /** Fires when a sentence's samples reach the player, i.e. when she starts. */
+  onSpoke?: () => void;
+  spawn?: Spawner;
 }): SpeakerHandle {
+  const spawn = opts.spawn ?? realSpawn;
   const dir = mkdtempSync(join(tmpdir(), "vela-kokoro-"));
-  const play = opts.play ?? "ffplay";
   let queue: Promise<void> = Promise.resolve();
-  let playing: ChildProcess | null = null;
   let stopped = false;
   let n = 0;
 
@@ -279,6 +421,14 @@ export function kokoroSpeaker(opts: {
     complained = true;
     opts.onProblem?.(why);
   };
+
+  // Kokoro's own rate, and the one the samples below are written at.
+  const player = pcmPlayer({
+    play: opts.play,
+    sampleRate: 24_000,
+    onProblem: complain,
+    spawn,
+  });
 
   const worker = spawn(
     opts.python,
@@ -327,14 +477,14 @@ export function kokoroSpeaker(opts: {
       return;
     }
 
-    await new Promise<void>((done) => {
-      playing = spawn(play, ["-nodisp", "-autoexit", "-loglevel", "quiet", file], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-      playing.on("close", () => done());
-      playing.on("error", () => done());
-    });
+    // Hand the samples over and move straight on to the next sentence — the
+    // player holds them, so synthesis runs ahead of what's being heard.
+    const pcm = pcmFromWav(readFileSync(file));
+    if (pcm) {
+      player.write(pcm);
+      opts.onSpoke?.();
+    } else complain("Kokoro wrote a file that isn't a wav");
+
     try {
       rmSync(file, { force: true, maxRetries: 2, retryDelay: 50 });
     } catch {
@@ -349,11 +499,13 @@ export function kokoroSpeaker(opts: {
       queue = queue.then(() => utter(text, index)).catch(() => {});
     },
     async drain(timeoutMs = 30_000) {
+      // Both halves: everything synthesised, then everything played out.
       await Promise.race([queue, new Promise((r) => setTimeout(r, timeoutMs).unref?.())]);
+      await player.drain(timeoutMs);
     },
     stop() {
       stopped = true;
-      playing?.kill();
+      player.stop();
       worker.stdin?.end();
       worker.kill();
       try {

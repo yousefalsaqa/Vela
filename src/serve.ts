@@ -1,7 +1,17 @@
 import { buildContextBlock, close } from "./memory.js";
 import { createCore } from "./core.js";
 import { serve } from "./server.js";
-import { PERSONA, HEARTBEAT_MS, HEARTBEAT_MODEL, THINKING_ON, NAME } from "./config.js";
+import { BUILD } from "./version.js";
+import {
+  PERSONA,
+  VOICE_PERSONA,
+  VOICE_ON,
+  HEARTBEAT_MS,
+  HEARTBEAT_MODEL,
+  THINKING_ON,
+  MODEL,
+  NAME,
+} from "./config.js";
 
 /**
  * Vela as a background service. Clients — the REPL, and voice later — attach
@@ -9,16 +19,20 @@ import { PERSONA, HEARTBEAT_MS, HEARTBEAT_MODEL, THINKING_ON, NAME } from "./con
  */
 async function main() {
   const context = buildContextBlock();
+  // The prompt lives here, but the speaking happens in whichever client
+  // attached — so the service has to be told that its replies will be heard.
+  const persona = VOICE_ON ? `${PERSONA}\n\n${VOICE_PERSONA}` : PERSONA;
   const core = createCore({
-    systemPrompt: context ? `${PERSONA}\n\n${context}` : PERSONA,
+    systemPrompt: context ? `${persona}\n\n${context}` : persona,
     heartbeatMs: HEARTBEAT_MS,
     heartbeatModel: HEARTBEAT_MODEL,
+    model: MODEL,
     thinking: THINKING_ON,
   });
 
   const server = await serve({ core, name: NAME });
   console.log(
-    `\n  ${NAME} listening on 127.0.0.1:${server.endpoint.port} (pid ${process.pid}).` +
+    `\n  ${NAME} ${BUILD} listening on 127.0.0.1:${server.endpoint.port} (pid ${process.pid}).` +
       `\n  Attach with: npm run dev\n  Ctrl+C to stop.\n`,
   );
 

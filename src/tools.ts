@@ -63,16 +63,21 @@ export const velaToolDefs = [
         const rows = recall(args.query, args.kind as MemoryKind | undefined);
         if (!rows.length) return text("No matching memories.");
         return text(
-          rows.map((r) => `#${r.id} [${r.kind}] ${r.content}`).join("\n"),
+          rows.map((r) => `[[${r.name}]] [${r.kind}] ${r.body}`).join("\n"),
         );
       },
     ),
 
     tool(
       "forget",
-      "Delete a memory by id. Use when a stored fact turns out to be wrong or stale.",
-      { id: z.number().describe("The memory id, e.g. 4") },
-      async (args) => text(forget(args.id)),
+      "Delete a memory by name. Use when a stored fact turns out to be wrong " +
+        "or stale. The name is the one recall shows in double brackets.",
+      {
+        name: z
+          .string()
+          .describe("The note name, e.g. 'yousef-prefers-python'"),
+      },
+      async (args) => text(forget(args.name)),
     ),
 
     tool(

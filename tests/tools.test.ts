@@ -1,12 +1,20 @@
-import { test, describe, before } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { velaToolDefs } from "../src/tools.js";
 
 // The tool handlers go through the default store, so point it at a throwaway
-// database before any of them run.
+// database and a throwaway vault before any of them run. Without the vault,
+// `remember` would write notes into his real one.
+let vault: string;
 before(() => {
   process.env.VELA_DB = ":memory:";
+  vault = mkdtempSync(join(tmpdir(), "vela-vault-tools-"));
+  process.env.VELA_VAULT = vault;
 });
+after(() => rmSync(vault, { recursive: true, force: true }));
 
 const byName = new Map(velaToolDefs.map((t) => [t.name, t]));
 
@@ -58,11 +66,16 @@ describe("tool surface", () => {
 
 describe("memory tools", () => {
   test("remember then recall round-trips", async () => {
-    assert.match(
+    assert.equal(
       await call("remember", { kind: "fact", content: "Owns a Civic." }),
-      /Saved memory #\d+\./,
+      "Saved [[owns-a-civic]].",
     );
-    assert.match(await call("recall", { query: "Civic" }), /\[fact\] Owns a Civic\./);
+    // recall reports the note name as a link, which is what forget takes and
+    // what Obsidian resolves.
+    assert.match(
+      await call("recall", { query: "Civic" }),
+      /\[\[owns-a-civic\]\] \[fact\] Owns a Civic\./,
+    );
   });
 
   test("recall says so rather than returning nothing", async () => {
@@ -72,8 +85,11 @@ describe("memory tools", () => {
     );
   });
 
-  test("forget reports an id that was never there", async () => {
-    assert.equal(await call("forget", { id: 4242 }), "No memory #4242.");
+  test("forget reports a name that was never there", async () => {
+    assert.equal(
+      await call("forget", { name: "never-existed" }),
+      "No memory called never-existed.",
+    );
   });
 });
 

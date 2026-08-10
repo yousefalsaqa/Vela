@@ -1,6 +1,11 @@
 import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createCore, type CoreEvent, type Session } from "../src/core.js";
+import {
+  createCore,
+  sessionOptions,
+  type CoreEvent,
+  type Session,
+} from "../src/core.js";
 import { createStore, type Store } from "../src/memory.js";
 
 /**
@@ -187,6 +192,121 @@ describe("createCore", () => {
     core.stop();
   });
 
+  test("reports a result that came back without a duration as zero", async () => {
+    const core = build();
+    core.send("hello");
+    // The SDK omits duration_ms on some result shapes; NaN in the terminal is
+    // worse than 0.0s.
+    script.emit({ type: "result" });
+    await until(() => events.some((e) => e.type === "result"), "the result");
+
+    const done = events.find((e) => e.type === "result") as { ms: number };
+    assert.equal(done.ms, 0);
+    core.stop();
+  });
+
+  describe("the ambient half", () => {
+    /**
+     * The path where she speaks up unprompted. The real heartbeat calls the
+     * model on a timer, so both halves are scripted here: the test decides
+     * when a check happens and what a watch firing looks like.
+     */
+    const ambient = (over: Record<string, unknown> = {}) => {
+      let say: ((text: string) => void) | undefined;
+      let isBusy: (() => boolean) | undefined;
+      let model: string | undefined;
+      let onFire: ((ids: number[]) => void) | undefined;
+      const checked: (number[] | undefined)[] = [];
+      let heartbeatStopped = false;
+      let triggersStopped = false;
+
+      const core = build({
+        heartbeatMs: 600_000,
+        heartbeat: (opts: Record<string, unknown>) => {
+          say = opts.say as typeof say;
+          isBusy = opts.isBusy as typeof isBusy;
+          model = opts.model as string;
+          return {
+            check: async (only?: number[]) => void checked.push(only),
+            stop: () => void (heartbeatStopped = true),
+          };
+        },
+        triggers: (opts: Record<string, unknown>) => {
+          onFire = opts.onFire as typeof onFire;
+          return () => void (triggersStopped = true);
+        },
+        ...over,
+      } as Record<string, unknown>);
+
+      return {
+        core,
+        checked,
+        speakUp: (text: string) => say!(text),
+        busy: () => isBusy!(),
+        fire: (ids: number[]) => onFire!(ids),
+        model: () => model,
+        stopped: () => ({ heartbeat: heartbeatStopped, triggers: triggersStopped }),
+      };
+    };
+
+    test("an unprompted line reaches every subscriber", () => {
+      const a = ambient();
+      const second: CoreEvent[] = [];
+      a.core.subscribe((e) => second.push(e));
+
+      a.speakUp("The build finished.");
+
+      assert.deepEqual(events.at(-1), { type: "say", text: "The build finished." });
+      assert.deepEqual(second.at(-1), { type: "say", text: "The build finished." });
+      a.core.stop();
+    });
+
+    test("tells the heartbeat when a turn is in flight, so it waits its turn", async () => {
+      const a = ambient();
+      assert.equal(a.busy(), false);
+
+      a.core.send("hello");
+      assert.equal(a.busy(), true, "checking in mid-answer would talk over her");
+
+      script.emit(result());
+      await until(() => events.some((e) => e.type === "result"), "the result");
+      assert.equal(a.busy(), false);
+      a.core.stop();
+    });
+
+    test("a watch firing asks the heartbeat to check just those watches", () => {
+      const a = ambient();
+      a.fire([3, 7]);
+      // The timer is only a floor — a triggered watch wakes itself in seconds.
+      assert.deepEqual(a.checked, [[3, 7]]);
+      a.core.stop();
+    });
+
+    test("checks in on haiku unless told otherwise", () => {
+      const a = ambient();
+      assert.equal(a.model(), "haiku");
+      a.core.stop();
+    });
+
+    test("takes the heartbeat model it was given", () => {
+      const a = ambient({ heartbeatModel: "sonnet" });
+      assert.equal(a.model(), "sonnet");
+      a.core.stop();
+    });
+
+    test("stopping shuts down both halves", () => {
+      const a = ambient();
+      a.core.stop();
+      assert.deepEqual(a.stopped(), { heartbeat: true, triggers: true });
+    });
+
+    test("stopping twice is not an error", () => {
+      const a = ambient();
+      a.core.stop();
+      assert.doesNotThrow(() => a.core.stop());
+    });
+  });
+
   describe("subscribers", () => {
     test("all of them see the same events", async () => {
       const core = build();
@@ -228,6 +348,43 @@ describe("createCore", () => {
       script.emit(text("ignored"));
       await new Promise((r) => setImmediate(r));
       assert.deepEqual(events, []);
+    });
+  });
+});
+
+/**
+ * The knobs that decide how fast she feels. A scripted session replaces the
+ * real one everywhere else in this file, so these would otherwise only ever be
+ * exercised by running her.
+ */
+describe("sessionOptions", () => {
+  test("leaves the model to the SDK when none was named", () => {
+    assert.equal("model" in sessionOptions({ systemPrompt: "" }), false);
+  });
+
+  test("pins the model it was given", () => {
+    assert.equal(sessionOptions({ systemPrompt: "", model: "sonnet" }).model, "sonnet");
+  });
+
+  test("turns thinking off by default, because it doubles time to first token", () => {
+    assert.deepEqual(sessionOptions({ systemPrompt: "" }).thinking, {
+      type: "disabled",
+    });
+  });
+
+  test("leaves thinking alone when it was asked for", () => {
+    assert.equal("thinking" in sessionOptions({ systemPrompt: "", thinking: true }), false);
+  });
+
+  test("streams partial messages, which is what lets her talk as she writes", () => {
+    assert.equal(sessionOptions({ systemPrompt: "" }).includePartialMessages, true);
+  });
+
+  test("appends the persona to the preset rather than replacing it", () => {
+    assert.deepEqual(sessionOptions({ systemPrompt: "you are Vela" }).systemPrompt, {
+      type: "preset",
+      preset: "claude_code",
+      append: "you are Vela",
     });
   });
 });

@@ -42,7 +42,16 @@ export interface CoreOptions {
   /** 0 disables the heartbeat and, with it, triggers. */
   heartbeatMs?: number;
   heartbeatModel?: string;
+  /** Undefined leaves the SDK on its own default. */
+  model?: string;
   thinking?: boolean;
+  /**
+   * The ambient half. Defaults to the real thing; tests pass versions that
+   * never reach the model, which is the only way to exercise the path where
+   * she speaks up on her own.
+   */
+  heartbeat?: typeof startHeartbeat;
+  triggers?: typeof startTriggers;
 }
 
 export interface Core {
@@ -53,6 +62,31 @@ export interface Core {
   /** True while a turn is in flight — the heartbeat waits for this. */
   isBusy: () => boolean;
   stop: () => void;
+}
+
+/**
+ * The options the real session is opened with. Pulled out so the parts that
+ * decide how fast she feels — the model, whether she thinks first — can be
+ * asserted on without a session that reaches the model.
+ */
+export function sessionOptions(opts: CoreOptions): Record<string, unknown> {
+  return {
+    systemPrompt: {
+      type: "preset",
+      preset: "claude_code",
+      append: opts.systemPrompt,
+    },
+    mcpServers: { vela: velaTools },
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    // Internet reach, via the agent-reach skill on this machine. It routes to
+    // per-platform CLIs itself, so there is nothing to wrap.
+    skills: ["agent-reach"],
+    ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.thinking ? {} : { thinking: { type: "disabled" as const } }),
+    cwd: process.cwd(),
+    includePartialMessages: true,
+  };
 }
 
 export function createCore(opts: CoreOptions): Core {
@@ -69,22 +103,7 @@ export function createCore(opts: CoreOptions): Core {
     ((stream) =>
       query({
         prompt: stream,
-        options: {
-          systemPrompt: {
-            type: "preset",
-            preset: "claude_code",
-            append: opts.systemPrompt,
-          },
-          mcpServers: { vela: velaTools },
-          permissionMode: "bypassPermissions",
-          allowDangerouslySkipPermissions: true,
-          // Internet reach, via the agent-reach skill on this machine. It
-          // routes to per-platform CLIs itself, so there is nothing to wrap.
-          skills: ["agent-reach"],
-          ...(opts.thinking ? {} : { thinking: { type: "disabled" as const } }),
-          cwd: process.cwd(),
-          includePartialMessages: true,
-        },
+        options: sessionOptions(opts) as Parameters<typeof query>[0]["options"],
       }) as unknown as Session);
 
   const session = makeSession(turns.stream());
@@ -125,8 +144,11 @@ export function createCore(opts: CoreOptions): Core {
     }
   })();
 
+  const beat = opts.heartbeat ?? startHeartbeat;
+  const watch = opts.triggers ?? startTriggers;
+
   const heartbeat: Heartbeat | null = opts.heartbeatMs
-    ? startHeartbeat({
+    ? beat({
         say: (text) => emit({ type: "say", text }),
         isBusy: () => busy,
         intervalMs: opts.heartbeatMs,
@@ -137,7 +159,7 @@ export function createCore(opts: CoreOptions): Core {
 
   // The timer is a floor; a watch with a trigger wakes itself in seconds.
   const stopTriggers = heartbeat
-    ? startTriggers({ store, onFire: (ids) => heartbeat.check(ids) })
+    ? watch({ store, onFire: (ids) => heartbeat.check(ids) })
     : () => {};
 
   return {

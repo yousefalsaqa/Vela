@@ -4,12 +4,16 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import {
   transcribe,
+  createTranscriber,
   audioDevices,
   pickDevice,
   resolveFfmpeg,
+  SAMPLE_RATE,
 } from "../../src/listen.js";
+import { WHISPER_PYTHON, WHISPER_WORKER } from "../../src/config.js";
 
 /**
  * The speech chain for real — `npm run test:live`.
@@ -55,6 +59,40 @@ describe("speech", { skip: !enabled && "set VELA_LIVE=1 to run" }, () => {
     // Whisper punctuates and capitalises; compare on the words alone.
     const words = (s: string) => s.toLowerCase().replace(/[^a-z ]/g, "").trim();
     assert.equal(words(heard), SPOKEN, `heard: ${JSON.stringify(heard)}`);
+  });
+
+  test("transcribes the same words through the warm worker", async () => {
+    // The worker is what actually runs when he talks; the CLI above is only
+    // the fallback. It takes raw samples, so put the wav through ffmpeg first
+    // exactly as the microphone path does.
+    assert.ok(existsSync(WHISPER_PYTHON), `no faster_whisper python at ${WHISPER_PYTHON}`);
+    const ffmpeg = resolveFfmpeg(process.env.VELA_FFMPEG);
+    assert.ok(ffmpeg, "ffmpeg not found");
+
+    const pcmFile = join(dir, "take.pcm");
+    execFileSync(ffmpeg, [
+      "-v", "error",
+      "-i", wav,
+      "-ac", "1",
+      "-ar", String(SAMPLE_RATE),
+      "-f", "s16le",
+      "-y", pcmFile,
+    ]);
+
+    const ears = createTranscriber({
+      python: WHISPER_PYTHON,
+      worker: WHISPER_WORKER,
+      model: process.env.VELA_WHISPER_MODEL ?? "base.en",
+      computeDevice: process.env.VELA_WHISPER_DEVICE ?? "cpu",
+      onProblem: (why) => assert.fail(why),
+    });
+    try {
+      const heard = await ears.hear(readFileSync(pcmFile));
+      const words = (s: string) => s.toLowerCase().replace(/[^a-z ]/g, "").trim();
+      assert.equal(words(heard), SPOKEN, `heard: ${JSON.stringify(heard)}`);
+    } finally {
+      ears.stop();
+    }
   });
 
   test("finds ffmpeg without needing it on PATH", () => {
