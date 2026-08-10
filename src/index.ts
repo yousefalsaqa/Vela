@@ -4,11 +4,20 @@ import { buildContextBlock, close } from "./memory.js";
 import { createCore } from "./core.js";
 import { connectIfRunning } from "./client.js";
 import { createStatus, interjection, isExit } from "./repl.js";
-import { createVoice, windowsSpeaker, type Voice } from "./voice.js";
+import {
+  createVoice,
+  windowsSpeaker,
+  neuralSpeaker,
+  kokoroSpeaker,
+  PRONOUNCE_PHONEMES,
+  PRONOUNCE_RESPELL,
+  type Voice,
+} from "./voice.js";
 import {
   audioDevices,
   pickDevice,
   resolveFfmpeg,
+  resolveFfplay,
   startRecording,
   type Recorder,
 } from "./listen.js";
@@ -20,8 +29,15 @@ import {
   HEARTBEAT_MODEL,
   THINKING_ON,
   VOICE_ON,
+  VOICE_ENGINE,
   VOICE_NAME,
   VOICE_RATE,
+  VOICE_PITCH,
+  EDGE_TTS,
+  KOKORO_VOICE,
+  KOKORO_SPEED,
+  KOKORO_PYTHON,
+  KOKORO_WORKER,
   LISTEN_ON,
   MIC,
   WHISPER_MODEL,
@@ -75,8 +91,34 @@ async function main() {
   });
 
   // A second face on the same event stream. The core doesn't know it's there.
-  const speaker = VOICE_ON ? windowsSpeaker(VOICE_NAME, VOICE_RATE) : null;
-  const voice: Voice | null = speaker ? createVoice(speaker.speak) : null;
+  const speaker = !VOICE_ON
+    ? null
+    : VOICE_ENGINE === "kokoro"
+      ? kokoroSpeaker({
+          python: KOKORO_PYTHON,
+          worker: KOKORO_WORKER,
+          voice: KOKORO_VOICE,
+          speed: KOKORO_SPEED,
+          play: resolveFfplay() ?? "ffplay",
+          onProblem: (why) =>
+            process.stderr.write(
+              `\n  \x1b[33mVoice off:\x1b[0m ${why}\n` +
+                `  Fall back with VELA_VOICE_ENGINE=neural\n`,
+            ),
+        })
+      : VOICE_ENGINE === "neural"
+        ? neuralSpeaker(VOICE_NAME, VOICE_RATE, VOICE_PITCH, {
+            tts: EDGE_TTS,
+            play: resolveFfplay() ?? "ffplay",
+          })
+        : windowsSpeaker(VOICE_NAME, VOICE_RATE);
+  // Kokoro takes inline phonemes; the other two need a respelling.
+  const voice: Voice | null = speaker
+    ? createVoice(
+        speaker.speak,
+        VOICE_ENGINE === "kokoro" ? PRONOUNCE_PHONEMES : PRONOUNCE_RESPELL,
+      )
+    : null;
 
   // Everything below is rendering. The core has no idea a terminal exists.
   let turnDone: (() => void) | null = null;
@@ -213,6 +255,9 @@ async function main() {
 
   core.stop();
   status.stop();
+  voice?.flush();
+  // Let her finish the sentence before the process dies.
+  await speaker?.drain?.();
   voice?.stop();
   speaker?.stop();
   rl.close();

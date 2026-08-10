@@ -1,8 +1,15 @@
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 /**
  * Everything both entry points need to agree on: who she is, how often she
  * checks in, and how hard she thinks. src/index.ts (the REPL) and src/serve.ts
  * (the background service) both read from here.
  */
+
+const here = dirname(fileURLToPath(import.meta.url));
+/** The Kokoro worker script, resolved relative to the source rather than cwd. */
+export const KOKORO_WORKER = resolve(here, "../scripts/kokoro_worker.py");
 
 export const NAME = process.env.VELA_NAME ?? "Vela";
 
@@ -25,8 +32,30 @@ export const THINKING_ON =
 // Speech is off unless asked for — a terminal that starts talking at you is a
 // surprise, not a feature.
 export const VOICE_ON = (process.env.VELA_VOICE ?? "off").toLowerCase() === "on";
-export const VOICE_NAME = process.env.VELA_VOICE_NAME; // e.g. "Microsoft Zira Desktop"
-export const VOICE_RATE = Number(process.env.VELA_VOICE_RATE ?? "1");
+/**
+ * How she speaks:
+ *   kokoro — local neural, offline, ~1GB resident while speech is on. Default,
+ *            because the cloud voices have a cadence that gives them away.
+ *   neural — edge-tts, free and keyless but a network round trip per sentence.
+ *   sapi   — built-in Windows voices: instant, offline, and they sound like 2003.
+ */
+export const VOICE_ENGINE = (process.env.VELA_VOICE_ENGINE ?? "kokoro").toLowerCase();
+export const KOKORO_VOICE = process.env.VELA_KOKORO_VOICE ?? "bf_emma";
+export const KOKORO_SPEED = Number(process.env.VELA_KOKORO_SPEED ?? "1.1");
+export const KOKORO_PYTHON =
+  process.env.VELA_KOKORO_PYTHON ??
+  join(process.env.USERPROFILE ?? "", ".vela-tts", "Scripts", "python.exe");
+export const VOICE_NAME =
+  process.env.VELA_VOICE_NAME ??
+  (VOICE_ENGINE === "neural" ? "en-GB-LibbyNeural" : undefined);
+/** SAPI: -10..10. Neural: percent — +12 is brisker, which reads as composed. */
+export const VOICE_RATE = Number(
+  process.env.VELA_VOICE_RATE ?? (VOICE_ENGINE === "neural" ? "12" : "1"),
+);
+/** Neural only, in Hz. Slightly lower sounds less chirpy. */
+export const VOICE_PITCH = Number(process.env.VELA_VOICE_PITCH ?? "-8");
+/** uv installs this to ~/.local/bin, which is already on the user PATH. */
+export const EDGE_TTS = process.env.VELA_EDGE_TTS ?? "edge-tts";
 
 // Push-to-talk. Enter on an empty line starts recording, Enter again stops it.
 export const LISTEN_ON = (process.env.VELA_LISTEN ?? "off").toLowerCase() === "on";

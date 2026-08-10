@@ -83,11 +83,11 @@ export interface ListenOptions {
  * and anything launched from them — don't see it until they restart, which
  * turns "push-to-talk does nothing" into a mystery. Look where winget puts it.
  */
-export function resolveFfmpeg(explicit?: string): string | null {
+export function resolveWinGetBinary(name: string, explicit?: string): string | null {
   if (explicit) return existsSync(explicit) || !explicit.includes("\\") ? explicit : null;
 
   const local = process.env.LOCALAPPDATA ?? "";
-  const link = join(local, "Microsoft", "WinGet", "Links", "ffmpeg.exe");
+  const link = join(local, "Microsoft", "WinGet", "Links", `${name}.exe`);
   if (existsSync(link)) return link;
 
   const packages = join(local, "Microsoft", "WinGet", "Packages");
@@ -96,7 +96,7 @@ export function resolveFfmpeg(explicit?: string): string | null {
       if (!/ffmpeg/i.test(entry)) continue;
       const root = join(packages, entry);
       for (const build of readdirSync(root)) {
-        const exe = join(root, build, "bin", "ffmpeg.exe");
+        const exe = join(root, build, "bin", `${name}.exe`);
         if (existsSync(exe)) return exe;
       }
     }
@@ -105,6 +105,10 @@ export function resolveFfmpeg(explicit?: string): string | null {
   }
   return null;
 }
+
+export const resolveFfmpeg = (explicit?: string) => resolveWinGetBinary("ffmpeg", explicit);
+/** ffplay ships with ffmpeg and is what plays the neural speech back. */
+export const resolveFfplay = (explicit?: string) => resolveWinGetBinary("ffplay", explicit);
 
 export async function audioDevices(ffmpeg = "ffmpeg"): Promise<string[]> {
   // The device list always goes to stderr, but whether ffmpeg then exits zero

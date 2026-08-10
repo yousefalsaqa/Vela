@@ -1,6 +1,11 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { speakable, sentences, createVoice } from "../src/voice.js";
+import {
+  speakable,
+  sentences,
+  createVoice,
+  PRONOUNCE_PHONEMES,
+} from "../src/voice.js";
 
 describe("speakable", () => {
   test("replaces a code block rather than reading it out", () => {
@@ -39,6 +44,53 @@ describe("speakable", () => {
 
   test("leaves plain prose alone", () => {
     assert.equal(speakable("Build succeeded in 41 seconds."), "Build succeeded in 41 seconds.");
+  });
+
+  describe("pronunciation", () => {
+    // Left alone, every en-GB voice says "YO-sef". This only affects what's
+    // spoken; the printed text keeps the real spelling.
+    describe("respelling, for edge-tts and SAPI", () => {
+      test("respells his name so it comes out you-sef", () => {
+        assert.equal(speakable("Morning, Yousef."), "Morning, Yoosef.");
+      });
+
+      test("handles the possessive", () => {
+        assert.equal(speakable("that's Yousef's call"), "that's Yoosef's call");
+      });
+
+      test("is case insensitive", () => {
+        assert.equal(speakable("YOUSEF, look"), "Yoosef, look");
+      });
+
+      test("does not touch a word that merely contains it", () => {
+        assert.equal(speakable("Yousef_Portfolio is fine"), "Yousef_Portfolio is fine");
+      });
+    });
+
+    describe("phonemes, for Kokoro", () => {
+      const say = (t: string) => speakable(t, PRONOUNCE_PHONEMES);
+
+      test("emits an inline phoneme override", () => {
+        assert.equal(say("Morning, Yousef."), "Morning, [Yousef](/jˈuːsəf/).");
+      });
+
+      test("handles the possessive without stranding an apostrophe", () => {
+        assert.equal(say("Yousef's build"), "[Yousefs](/jˈuːsəfs/) build");
+      });
+
+      test("survives the markdown cleanup that would strip it", () => {
+        // Pronunciation runs after link-stripping for exactly this reason —
+        // applied first, [Yousef](/…/) would be flattened back to "Yousef".
+        assert.equal(
+          say("see [the docs](https://example.com), Yousef"),
+          "see the docs, [Yousef](/jˈuːsəf/)",
+        );
+      });
+
+      test("leaves other words alone", () => {
+        assert.equal(say("the build passed"), "the build passed");
+      });
+    });
   });
 });
 

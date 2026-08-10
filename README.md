@@ -129,13 +129,37 @@ the events stream never ends, and the turn behind it never got through.
 VELA_VOICE=on npm run dev
 ```
 
+Three engines, one env var apart:
+
+| `VELA_VOICE_ENGINE` | What | Cost |
+|---|---|---|
+| `kokoro` *(default)* | [Kokoro-82M](https://github.com/hexgrad/kokoro) running locally, voice `bf_emma` | ~1GB resident while speech is on; offline |
+| `neural` | edge-tts, Microsoft's cloud voices, `en-GB-LibbyNeural` | nothing local; a network round trip per sentence |
+| `sapi` | built-in Windows voices | nothing; sounds like 2003 |
+
+Kokoro is the default because the cloud voices have an even, over-articulated
+cadence that gives them away. It runs on CPU — the GPU is worth nothing at
+these lengths and is better left for other things. A [warm
+worker](scripts/kokoro_worker.py) holds the model so the 1.2s load is paid once
+at startup rather than per sentence, and it only exists while voice is on.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `VELA_VOICE` | `off` | `on` makes her speak her replies |
-| `VELA_VOICE_NAME` | system default | e.g. `Microsoft Zira Desktop` |
-| `VELA_VOICE_RATE` | `1` | -10 (slow) to 10 (fast) |
+| `VELA_KOKORO_VOICE` | `bf_emma` | also `bf_isabella`, `bf_alice`, `bf_lily` |
+| `VELA_KOKORO_SPEED` | `1.1` | 1.0 is normal |
+| `VELA_VOICE_NAME` | per engine | edge-tts voice, or a SAPI voice name |
+| `VELA_VOICE_RATE` / `_PITCH` | `12` / `-8` | edge-tts only: percent and Hz |
 
-Windows SAPI, so no install and no network. [voice.ts](src/voice.ts) speaks
+**Names get pronounced, not guessed at.** Every English voice reads "Yousef" as
+"YO-sef". Kokoro takes inline phonemes — `[Yousef](/jˈuːsəf/)` — which say
+exactly what's wanted; the other two get a phonetic respelling instead, since
+they'd read the brackets aloud. Hence two tables in
+[voice.ts](src/voice.ts), applied *after* the markdown cleanup, because the
+link-stripping rule would otherwise flatten the phoneme markup back to plain
+text. Anything else she mangles is one line to fix.
+
+[voice.ts](src/voice.ts) speaks
 sentence by sentence as the reply streams — waiting for the whole answer would
 add its length to a latency budget that's already about a second and a half.
 `speakable()` strips what reads badly aloud: code blocks become "code block",
