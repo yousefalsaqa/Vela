@@ -8,8 +8,11 @@ import {
   VOICE_ON,
   HEARTBEAT_MS,
   HEARTBEAT_MODEL,
+  HEARTBEAT_SKILLS,
+  ensureClaudeOnPath,
   THINKING_ON,
   MODEL,
+  SKILLS,
   NAME,
 } from "./config.js";
 
@@ -18,6 +21,8 @@ import {
  * and detach; she keeps her session, her watches and her memory throughout.
  */
 async function main() {
+  // Same reason as the REPL: the bundled `claude` is not on PATH by itself.
+  ensureClaudeOnPath();
   const context = buildContextBlock();
   // The prompt lives here, but the speaking happens in whichever client
   // attached — so the service has to be told that its replies will be heard.
@@ -28,6 +33,8 @@ async function main() {
     heartbeatModel: HEARTBEAT_MODEL,
     model: MODEL,
     thinking: THINKING_ON,
+    skills: SKILLS,
+    heartbeatSkills: HEARTBEAT_SKILLS,
   });
 
   const server = await serve({ core, name: NAME });

@@ -16,7 +16,7 @@ const SILENT = "SILENT";
 
 const AMBIENT_PROMPT = `
 You are running as a background heartbeat, not in conversation. Yousef did not
-ask you anything — you woke up on a timer to check on things he asked you to
+ask you anything. You woke up on a timer to check on things he asked you to
 watch.
 
 You are observing, not acting. Look at the world (files, commands, open
@@ -25,7 +25,7 @@ him, and stop. Do not fix, edit, launch, or change anything.
 
 The bar for speaking is high. Interrupting someone who is concentrating costs
 more than staying quiet costs. Speak only when a watch has actually resolved or
-changed state — not to report that things are still in progress, and never to
+changed state, not to report that things are still in progress, and never to
 repeat something you already said.
 
 Reply with exactly ${SILENT} when there is nothing worth saying. That is the
@@ -37,10 +37,10 @@ Otherwise reply with one line, in one of these two forms:
 #<watch id> done: <what happened, in one sentence>
 
 Use the "done" form when the thing you were watching has settled for good and
-there is nothing left to check — that closes the watch. Use the plain form when
+there is nothing left to check, which closes the watch. Use the plain form when
 it is worth mentioning but the watch should stay open.
 
-Lead with the outcome. No preamble, no offer to help — he'll ask if he wants
+Lead with the outcome. No preamble, no offer to help. He'll ask if he wants
 something done about it.
 `.trim();
 
@@ -86,7 +86,11 @@ export function renderWatches(watches: WatchRow[]): string {
 }
 
 /** The real model call. Swapped out in tests. */
-async function askModel(prompt: string, model: string): Promise<string> {
+async function askModel(
+  prompt: string,
+  model: string,
+  skills: string[] = [],
+): Promise<string> {
   const response = query({
     prompt,
     options: {
@@ -106,9 +110,10 @@ async function askModel(prompt: string, model: string): Promise<string> {
         "mcp__vela__forget",
         "mcp__vela__remember",
       ],
-      // Reach is read-only, so a watch can be about a PR or a feed, not just
-      // something on this machine.
-      skills: ["agent-reach"],
+      // An allow list from config.ts, not everything installed. Reach is
+      // read-only, so a watch can be about a PR or a feed and not just
+      // something on this machine; anything that writes files is kept out.
+      ...(skills.length ? { skills } : {}),
       // A heartbeat is a look-and-report, not a reasoning task.
       thinking: { type: "disabled" },
       model,
@@ -135,8 +140,10 @@ export interface HeartbeatOptions {
   model: string;
   /** Defaults to the assistant's own store; tests pass a throwaway one. */
   store?: Store;
+  /** Skills the tick may reach for. Deliberately shorter than the session's. */
+  skills?: string[];
   /** Defaults to a real model call; tests pass a stub. */
-  ask?: (prompt: string, model: string) => Promise<string>;
+  ask?: (prompt: string, model: string, skills: string[]) => Promise<string>;
 }
 
 /**
@@ -162,6 +169,7 @@ export async function tick(
         `${renderWatches(watches)}\n\n` +
         `Check them and reply with ${SILENT} or a single #id line.`,
       opts.model,
+      opts.skills ?? [],
     ),
   );
 

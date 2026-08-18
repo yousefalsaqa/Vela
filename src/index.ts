@@ -36,8 +36,11 @@ import {
   PROMPT,
   HEARTBEAT_MS,
   HEARTBEAT_MODEL,
+  HEARTBEAT_SKILLS,
+  ensureClaudeOnPath,
   THINKING_ON,
   MODEL,
+  SKILLS,
   VOICE_ON,
   VOICE_ENGINE,
   VOICE_NAME,
@@ -84,6 +87,9 @@ async function main() {
   const core =
     remote ??
     (() => {
+      // Before any tool opens a shell: skill-creator's eval modes shell out to
+      // `claude`, which ships inside the SDK but not anywhere PATH looks.
+      ensureClaudeOnPath();
       const context = buildContextBlock();
       // Spoken replies want to be much shorter than written ones, and she has
       // no way to know she's being listened to unless she's told.
@@ -94,6 +100,8 @@ async function main() {
         heartbeatModel: HEARTBEAT_MODEL,
         model: MODEL,
         thinking: THINKING_ON,
+        skills: SKILLS,
+        heartbeatSkills: HEARTBEAT_SKILLS,
       });
     })();
 

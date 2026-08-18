@@ -255,6 +255,37 @@ describe("tick", () => {
       assert.deepEqual(prompts, [], "a closed watch must not cost a call");
     });
   });
+
+  describe("skills", () => {
+    test("hands the model the allow list it was given", async () => {
+      store.addWatch("the build");
+      const seen: string[][] = [];
+      await tick(
+        opts("stay quiet", {
+          skills: ["agent-reach"],
+          ask: async (_p, _m, skills) => {
+            seen.push(skills);
+            return "stay quiet";
+          },
+        }),
+      );
+      assert.deepEqual(seen, [["agent-reach"]]);
+    });
+
+    test("offers none when none were allowed, rather than falling back to a default", async () => {
+      store.addWatch("the build");
+      const seen: string[][] = [];
+      await tick(
+        opts("stay quiet", {
+          ask: async (_p, _m, skills) => {
+            seen.push(skills);
+            return "stay quiet";
+          },
+        }),
+      );
+      assert.deepEqual(seen, [[]]);
+    });
+  });
 });
 
 describe("startHeartbeat", () => {

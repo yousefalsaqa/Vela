@@ -380,6 +380,18 @@ describe("sessionOptions", () => {
     assert.equal(sessionOptions({ systemPrompt: "" }).includePartialMessages, true);
   });
 
+  test("offers the skills it was given", () => {
+    assert.deepEqual(
+      sessionOptions({ systemPrompt: "", skills: ["agent-reach", "skill-creator"] }).skills,
+      ["agent-reach", "skill-creator"],
+    );
+  });
+
+  test("omits skills entirely when none are installed, rather than sending an empty list", () => {
+    assert.equal("skills" in sessionOptions({ systemPrompt: "" }), false);
+    assert.equal("skills" in sessionOptions({ systemPrompt: "", skills: [] }), false);
+  });
+
   test("appends the persona to the preset rather than replacing it", () => {
     assert.deepEqual(sessionOptions({ systemPrompt: "you are Vela" }).systemPrompt, {
       type: "preset",

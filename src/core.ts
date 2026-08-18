@@ -45,6 +45,10 @@ export interface CoreOptions {
   /** Undefined leaves the SDK on its own default. */
   model?: string;
   thinking?: boolean;
+  /** Skill names the session may reach for. Empty means none are offered. */
+  skills?: string[];
+  /** The heartbeat's own, shorter list — it runs unsupervised. */
+  heartbeatSkills?: string[];
   /**
    * The ambient half. Defaults to the real thing; tests pass versions that
    * never reach the model, which is the only way to exercise the path where
@@ -79,9 +83,10 @@ export function sessionOptions(opts: CoreOptions): Record<string, unknown> {
     mcpServers: { vela: velaTools },
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    // Internet reach, via the agent-reach skill on this machine. It routes to
-    // per-platform CLIs itself, so there is nothing to wrap.
-    skills: ["agent-reach"],
+    // Skills are named, not wrapped: agent-reach routes to per-platform CLIs
+    // itself, skill-creator writes files. The list is discovered at startup in
+    // config.ts, so one she wrote for herself is hers on the next start.
+    ...(opts.skills?.length ? { skills: opts.skills } : {}),
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.thinking ? {} : { thinking: { type: "disabled" as const } }),
     cwd: process.cwd(),
@@ -153,6 +158,7 @@ export function createCore(opts: CoreOptions): Core {
         isBusy: () => busy,
         intervalMs: opts.heartbeatMs,
         model: opts.heartbeatModel ?? "haiku",
+        skills: opts.heartbeatSkills ?? [],
         store,
       })
     : null;

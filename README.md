@@ -118,9 +118,8 @@ the process already exited stays quiet instead of reporting immediately.
 Vela reads the web through [agent-reach](https://github.com/Panniantong/Agent-Reach),
 installed on this machine with `uv tool install`. There is no wrapper here and
 shouldn't be one — agent-reach routes to per-platform CLIs (`gh`, `yt-dlp`,
-Jina Reader, `twitter-cli`, OpenCLI) and Vela calls those directly. The whole
-integration is `skills: ["agent-reach"]` on the session options in
-[index.ts](src/index.ts) and [ambient.ts](src/ambient.ts).
+Jina Reader, `twitter-cli`, OpenCLI) and Vela calls those directly. It is
+one name in a list; see [Skills](#skills) below.
 
 Live without further setup: **any web page** (Jina Reader), **GitHub** (`gh`),
 **YouTube** (`yt-dlp`), **RSS/Atom**, **V2EX**, **Exa semantic search**.
@@ -133,9 +132,89 @@ Two need a browser action that can't be scripted:
   [OpenCLI extension](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk)
   and leave the browser open; they run off your live session.
 
-`agent-reach doctor --json` reports what's actually routing right now. The
-heartbeat gets reach too, so a watch can be about a PR or a feed rather than
-only something on this machine — it's read-only either way.
+`agent-reach doctor --json` reports what's actually routing right now.
+
+## Skills
+
+Skills are not listed in the source. `discoverSkills()` in
+[config.ts](src/config.ts) reads `~/.claude/skills` at startup and treats any
+folder holding a `SKILL.md` as a skill, so anything installed for Claude Code
+is installed for Vela.
+
+That used to be a literal array, which meant a skill she wrote for herself with
+`skill-creator` was unreachable until someone edited TypeScript. Discovering
+them instead is what makes her able to grow her own hands, and it costs one
+`readdirSync` per start.
+
+The heartbeat gets a separate, shorter list. It runs unsupervised on a timer,
+so it observes and does not act, the same reason it is denied `Write`, `Edit`
+and the memory writers. `agent-reach` is read-only and stays on it; anything
+that writes files does not.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VELA_SKILLS_DIR` | `~/.claude/skills` | Where to look |
+| `VELA_SKILLS` | everything found there | Comma-separated override for the session |
+| `VELA_SKILLS_EXCEPT` | none | Names to drop; a trailing `*` drops a family |
+| `VELA_HEARTBEAT_SKILLS` | `agent-reach`, `gws-calendar-agenda` | Comma-separated override for the tick |
+
+What is installed, and why:
+
+| Skill | For |
+|---|---|
+| `agent-reach` | The internet, as above |
+| `council` | A cross-model second opinion on a hard call |
+| `skill-creator` | Writing and evaluating her own skills |
+| `frontend-design`, `theme-factory` | Design that doesn't read as a template |
+| `webapp-testing` | Driving and screenshotting a local page with Playwright |
+| `xlsx`, `docx`, `pdf`, `pptx` | The documents his actual job is made of |
+| `claude-api` | The SDK she is built on, for when he asks her to change it |
+| `gws-*` | Calendar, mail, tasks, drive and sheets, through the `gws` CLI |
+| `cad-khana` | build123d, with interference, clearance and printability checks |
+| `systematic-debugging`, `test-driven-development`, `verification-before-completion` | How to work, from obra/superpowers |
+| `copywriting`, `copy-editing`, `seo-audit`, `content-strategy`, `marketing-psychology`, `cro` | Marketing, six of forty-nine |
+| `backtest-review`, `strategy-critique`, `risk-report`, `indicator-design`, `data-scrub`, `hedge-lab` | Reviewing a trading idea sceptically |
+| `strategy-framework`, `risk-management`, `position-sizing`, `portfolio-analytics`, `ohlcv-processing`, `pandas-ta`, `backtrader`, `walk-forward-validation`, `options-pricing`, `volatility-modeling`, `token-economics`, `coingecko-api` | The background, for equities and crypto both |
+
+Deliberately not installed: `discernment-nudge`, which runs a check before
+every substantive reply, for the same reason the humanizer skill isn't here.
+An extra pass per turn is the cost the voice spec exists to avoid.
+
+The Google ones need `gws auth setup` once, which wants the `gcloud` CLI
+present, then creates a Cloud project and opens a browser to log in. Until that
+runs they are inert. `cad-khana` needs `pip install build123d`.
+
+Two things about that setup are worth writing down, because neither error says
+what it means. A Google account that has never touched Cloud cannot create a
+project at all until the Cloud Terms of Service are accepted once in a browser,
+and the wizard swallows that failure and re-prompts for the project name, which
+looks exactly like the name being rejected. Separately, `gmail.modify` and full
+`drive` are restricted scopes: publishing the consent screen to production
+without Google's verification gets them refused with a 403, so the app stays in
+testing, and a testing app's refresh token expires every seven days. Full Gmail
+and Drive access costs a weekly `gws auth login`. Dropping to Calendar, Tasks
+and Sheets, which are only sensitive, buys a token that doesn't expire. Afterwards,
+`VELA_HEARTBEAT_SKILLS=agent-reach,gws-calendar-agenda` is what makes "your 2pm
+moved" something she says on her own.
+
+`skill-creator` shells out to `claude -p` for description optimisation and
+evals. That binary ships inside the SDK, under a package whose name carries the
+platform, and it is not on PATH by itself. `ensureClaudeOnPath()` in
+[config.ts](src/config.ts) finds it by looking rather than by guessing and
+prepends the directory at startup, so an SDK upgrade can't strand a copy at an
+old version.
+
+Ninety of them is about 5,400 tokens of names and descriptions in every system
+prompt. That is cached after the first call so it costs almost nothing in
+speed, but a long menu is a worse menu, and `VELA_SKILLS_EXCEPT=kalshi-*` is
+the short way to shorten it. Discovery is the right default and a bad
+absolute: once a repo of sixty trading skills is on disk, the choice is either
+naming the eighty he wants or the twenty he doesn't.
+
+Set-but-empty means none, which is not the same as unset. An empty skills
+directory means no skills rather than a fallback set: if it isn't there then
+neither is agent-reach, and naming it anyway would only send her reaching
+through something that doesn't exist.
 
 ## Running as a service
 
@@ -391,6 +470,7 @@ src/
   desktop.ts   Windows control via PowerShell
   ambient.ts   Background heartbeat — checks watches, speaks unprompted
   triggers.ts  Wakes a watch on a file write or a process exit; never calls the model
+  config.ts    Persona, voice spec, and which skills each half is given
   repl.ts      Terminal rendering: prompts, interjections, stream deltas
   tools.ts     Exposes the above to the model as MCP tools
 tests/         Unit tests; tests/live/ needs VELA_LIVE=1
@@ -484,3 +564,4 @@ nothing read it, so if you add to this list, bump it.
 | 1.1.0 | The core split out of the terminal, so she survives the window closing. Service mode, edge-tts speech, push-to-talk. |
 | 1.2.0 | A Kokoro voice worth listening to, one player for the whole conversation, and his name said right. |
 | 1.3.0 | Whisper kept warm instead of reloaded per utterance, memory as an Obsidian vault, and the spoken turn cut down to where it feels live. |
+| 1.4.0 | Skills discovered rather than listed, so she can be handed new hands without a code change. Thirty-four of them, and a voice spec that now says how to recover from a slip. |
