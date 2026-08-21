@@ -214,9 +214,22 @@ with sync_playwright() as p:
     page.screenshot(path=str(here / "s-error.png"))
 
     # ── the phone ─────────────────────────────────────────────────────────
+    # The reload above emptied the thread, so give her something to have said:
+    # a screen with no conversation around it is not the case being checked.
+    push({"type": "delta", "text": "Sensor 9 again, top right."})
+    push({"type": "result", "ms": 700})
     page.set_viewport_size({"width": 390, "height": 844})
     time.sleep(0.7)
-    check("on a phone the material is the interface", page.locator("#thread").is_hidden())
+    # The claim used to be that the transcript disappears entirely behind a
+    # screen. It reads better with her latest line kept: on a phone, mid
+    # conversation, "look at sensor 9" is useless if what she said about it is
+    # gone. Older exchanges still go.
+    check("her latest line stays readable over what she is showing",
+          page.locator(".turn:not(.past) .her").last.is_visible())
+    check("but the rest of the conversation does not crowd it",
+          page.locator(".turn.past").first.is_hidden())
+    check("and taps still reach the thing she is showing",
+          page.evaluate("getComputedStyle(document.getElementById('thread')).pointerEvents") == "none")
     page.screenshot(path=str(here / "s-phone-stage.png"))
     page.locator("#pull").click()
     time.sleep(0.5)

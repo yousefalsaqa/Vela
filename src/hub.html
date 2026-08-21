@@ -156,6 +156,7 @@ body[data-state="lost"] .state { color: var(--wrong); }
    Words on the left, her field on the right. When she puts something up, the
    material takes the right and she steps in behind the words. */
 .floor {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 52ch) minmax(0, 1fr);
   gap: var(--pad);
@@ -451,9 +452,42 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
   body[data-memory="on"] .fill { display: none; }
   body[data-memory="on"] .turn.past { display: block; }
 
-  /* Shown on a phone, the material is the interface. */
-  body[data-stage="on"] .thread { display: none; }
-  body[data-stage="on"][data-memory="on"] .thread { display: flex; }
+  /* Shown on a phone, the material is the interface — but not a silent one.
+     Her latest line lies along the bottom of it, over a fade so the diagram
+     still reads underneath, and taps pass straight through to the thing she
+     is showing. Everything older is behind the handle where it was. */
+  body[data-stage="on"] .thread {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 32dvh;
+    padding: 2.5rem 0 .5rem;
+    pointer-events: none;
+    background: linear-gradient(to top, var(--void) 42%, rgba(5, 9, 13, .82) 72%, transparent);
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  body[data-stage="on"] .turn.past,
+  body[data-stage="on"] .steps,
+  body[data-stage="on"] .took { display: none; }
+  body[data-stage="on"] .her { font-size: 1.05rem; line-height: 1.35; }
+
+  /* Pulling memory up wins over both. Declared last and with both attributes
+     so it beats the stage rules above it on their own terms. */
+  body[data-memory="on"][data-stage="on"] .thread,
+  body[data-memory="on"] .thread {
+    position: fixed;
+    inset: var(--rail) 0 0;
+    max-height: none;
+    padding: 1.2rem var(--pad) 5rem;
+    background: rgba(5, 9, 13, .97);
+    pointer-events: auto;
+  }
+  body[data-memory="on"][data-stage="on"] .turn.past,
+  body[data-memory="on"] .turn.past { display: block; }
+  body[data-memory="on"][data-stage="on"] .steps,
+  body[data-memory="on"][data-stage="on"] .took { display: block; }
   .stage { padding-bottom: .4rem; }
   .stage header { padding-top: .5rem; }
   .stage h2 { font-size: 1rem; }
