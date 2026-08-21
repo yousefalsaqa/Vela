@@ -184,6 +184,21 @@ export const THINKING_ON = switchedOn(process.env.VELA_THINKING, false);
 export const MODEL = process.env.VELA_MODEL;
 
 /**
+ * How hard she works a turn: low, medium, high, xhigh, max.
+ *
+ * Unset means high while thinking is off, which is not a preference so much
+ * as the only legal pairing — see sessionOptions in core.ts. Raising this is
+ * only meaningful alongside VELA_THINKING=on.
+ */
+export const EFFORT = process.env.VELA_EFFORT as
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | undefined;
+
+/**
  * Speech is on unless turned off.
  *
  * It used to be the other way round, on the grounds that a terminal which
@@ -246,6 +261,46 @@ export const LISTEN_ON = switchedOn(process.env.VELA_LISTEN, true);
  * there the browser is the entire point of double-clicking.
  */
 export const OPEN_HUB = switchedOn(process.env.VELA_OPEN, false);
+
+/**
+ * A fixed address, so her hub can be pinned.
+ *
+ * A random port and a fresh token per start is right for something you launch
+ * and read a link out of. It is wrong for something that runs from boot: the
+ * link changed every restart, so it could never be bookmarked, installed as a
+ * browser app, or opened by a hotkey, and the only way to reach her was the
+ * console window she printed it in. Both halves fixed, the address is
+ * permanent and she is one keypress away. 0 restores the old behaviour.
+ */
+export function portFrom(raw: string | undefined, fallback = 4823): number {
+  const text = (raw ?? "").trim();
+  // Number("") is 0, and 0 is a meaningful port here — so an unset variable
+  // would silently mean "any free port", which is the dead pinned link this
+  // function exists to prevent.
+  if (!text) return fallback;
+  const n = Number(text);
+  // 0 is meaningful: it asks the OS for any free port, which is what she did
+  // before this existed. Anything that isn't a usable port number is a typo,
+  // and silently listening on a random one would leave the pinned link dead
+  // with no clue why.
+  if (!Number.isInteger(n) || n < 0 || n > 65_535) return fallback;
+  return n;
+}
+export const PORT = portFrom(process.env.VELA_PORT);
+/** Keep the token across restarts. Off means a new key every start, as before. */
+export const KEEP_TOKEN = switchedOn(process.env.VELA_KEEP_TOKEN, true);
+
+/**
+ * Hold the speech models until the hub actually needs them.
+ *
+ * Measured on this machine, the service loads 1.1GB of Kokoro and 226MB of
+ * whisper at start, and running from boot it holds both all day whether or
+ * not anyone ever presses the microphone or the speaker. Deferred, an idle
+ * Vela is about 460MB. Both stay warm once started, so only the first
+ * sentence of a session pays the load. The terminal keeps its eager copies:
+ * there the load would land in the middle of a conversation.
+ */
+export const LAZY_WORKERS = switchedOn(process.env.VELA_LAZY_WORKERS, true);
 export const MIC = process.env.VELA_MIC; // DirectShow device name, or part of one
 export const WHISPER_MODEL = process.env.VELA_WHISPER_MODEL ?? "base.en";
 // winget puts ffmpeg on PATH, but not until the shell restarts.

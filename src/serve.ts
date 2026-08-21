@@ -17,9 +17,13 @@ import {
   ensureClaudeOnPath,
   THINKING_ON,
   MODEL,
+  EFFORT,
   SKILLS,
   NAME,
   OPEN_HUB,
+  PORT,
+  KEEP_TOKEN,
+  LAZY_WORKERS,
   WHISPER_PYTHON,
   WHISPER_WORKER,
   WHISPER_MODEL,
@@ -78,6 +82,7 @@ async function main() {
     heartbeatModel: HEARTBEAT_MODEL,
     model: MODEL,
     thinking: THINKING_ON,
+    effort: EFFORT,
     skills: SKILLS,
     heartbeatSkills: HEARTBEAT_SKILLS,
   });
@@ -93,6 +98,8 @@ async function main() {
         model: WHISPER_MODEL,
         computeDevice: WHISPER_DEVICE,
         vocabulary: WHISPER_VOCABULARY,
+        // She sits idle most of the day; the model can wait until he speaks.
+        lazy: LAZY_WORKERS,
         onProblem: (why) => console.log(`  Transcription: ${why}`),
       })
     : cliTranscriber({ model: WHISPER_MODEL, computeDevice: WHISPER_DEVICE });
@@ -103,6 +110,8 @@ async function main() {
         worker: KOKORO_WORKER,
         voice: KOKORO_VOICE,
         speed: KOKORO_SPEED,
+        // 1.1GB she only needs if he presses the speaker button.
+        lazy: LAZY_WORKERS,
         onProblem: (why) => console.log(`  Voice: ${why}`),
       })
     : null;
@@ -110,8 +119,14 @@ async function main() {
   const server = await serve({
     core,
     name: NAME,
+    // A fixed port and a kept token are what make her hub pinnable.
+    port: PORT,
+    keepToken: KEEP_TOKEN,
     hear: async (audio) => ears.hear(await pcmFromAudio(audio, { ffmpeg })),
     ...(mouth ? { render: (text: string) => mouth.render(text) } : {}),
+    // The hub says so the moment he presses record or switches sound on, so a
+    // deferred model loads in that gap instead of after it.
+    warm: (what) => (what === "ears" ? ears.warm() : mouth?.warm()),
   });
   const hub = hubUrl(server.endpoint);
   console.log(

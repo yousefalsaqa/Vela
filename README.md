@@ -90,6 +90,7 @@ Your half-typed line survives. Tuning:
 | `VELA_HEARTBEAT` | `5` | Minutes between checks, or `off` (also disables triggers) |
 | `VELA_HEARTBEAT_MODEL` | `haiku` | Model the heartbeat uses |
 | `VELA_THINKING` | `off` | `on` restores extended thinking — slower, better on hard problems |
+| `VELA_EFFORT` | `high` while thinking is off | `low` … `max`; raising it only means something with thinking on |
 
 ### Triggers
 
@@ -262,6 +263,7 @@ honours `prefers-reduced-motion`.
 | `POST /turn` | say something to her |
 | `POST /hear` | a browser recording in, words out |
 | `POST /speak` | a sentence in, a wav out |
+| `POST /warm` | he is about to speak or listen; load that model now |
 | `GET /screen` | what she is showing: title, note, and the screen's own key |
 | `GET /screen/file` | the shown file itself — the one route that key opens |
 | `GET /anime.js` | the vendored motion library; the one unauthenticated route |
@@ -366,6 +368,54 @@ comma with too little on either side is passed over. Anything containing a code
 fence is left whole, because those commas are code. The hub does the same
 split, carrying character offsets with each piece so the reading head still
 sweeps the right words.
+
+## Always on
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\autostart.ps1           # start with Windows
+powershell -ExecutionPolicy Bypass -File scripts\autostart.ps1 -Remove   # stop doing that
+```
+
+She runs from logon, hidden, at one address: **http://127.0.0.1:4823**. Pin
+that tab, install it as a browser app, give it a hotkey. There is no window to
+find and nothing to start.
+
+Two things had to change for an address to be worth pinning. The port was
+random, and so was the token, both minted fresh on every start — correct for
+something you launch and read a link out of, useless for something that is
+simply always there, because the link died every restart. Now the port is
+fixed (`VELA_PORT`) and the token is kept in `data/hub-token` and reused
+(`VELA_KEEP_TOKEN`). If something else already holds the port she takes any
+free one rather than failing to come up; a lost address beats no assistant.
+
+A scheduled task rather than a Startup shortcut, because Startup runs the
+`.bat` and that leaves a console window in the taskbar all day. The task runs
+her through `wscript`, which is the one way on Windows to get a genuinely
+invisible process: `-WindowStyle Hidden` on powershell.exe still flashes a
+console. Her log goes to `data/service.log`.
+
+**Idle, she is about 460MB and no measurable CPU.** She was 1.5GB, because the
+service loaded both speech models at start: 1.1GB of Kokoro and 226MB of
+whisper, held all day whether or not anyone ever pressed the microphone or the
+speaker. Both are deferred now, and the hub warms whichever one he is about to
+need at the gesture rather than at the sentence — `POST /warm` when he presses
+record, or switches sound on. Measured:
+
+| First sentence out of her | |
+|---|---|
+| cold, model loading | 4.65s |
+| warmed at the button press | 0.30s |
+| every sentence after | ~0.27s |
+
+The terminal keeps loading both eagerly, since there he presses Enter and
+talks and the load would land in the middle of that. `VELA_LAZY_WORKERS=off`
+for the old behaviour.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VELA_PORT` | `4823` | Her fixed address. `0` asks the OS for any free port |
+| `VELA_KEEP_TOKEN` | `on` | Reuse the saved key, so a pinned link keeps working |
+| `VELA_LAZY_WORKERS` | `on` | Hold Kokoro and whisper until first use |
 
 ## Running as a service
 
@@ -639,6 +689,14 @@ session start. Small and always-on beats a retrieval step that might miss.
 When memory outgrows that, add embedding search and keep only pinned facts in
 the block.
 
+**Thinking off has to carry an effort with it.** Claude Code's own
+`settings.json` holds an `effortLevel`, the SDK inherits it, and `xhigh` with
+thinking disabled is refused outright: every turn comes back as `API Error:
+400`. Started from a shell that had already overridden it, this never showed
+up. Started clean from the scheduled task at logon, she answered nothing else.
+`sessionOptions` in [core.ts](src/core.ts) pins `effort: high` whenever
+thinking is off, and `VELA_EFFORT` overrides it.
+
 **Extended thinking is off by default.** Measured across four-turn
 conversations, thinking on runs 1.6–5.5s per turn; off runs 1.3–2.2s. The
 median gain is small — the point is the tail. The 3–5s stalls are what make it
@@ -709,8 +767,10 @@ under it, so `Vela 1.3.0 (c5e439d)` in the banner says exactly what is running.
 She's told her own version too, which is what she answers with when asked.
 
 The minor number goes up when she gains a sense or a limb; the patch when
-something that was broken isn't. It stayed at 1.0.0 for three releases because
-nothing read it, so if you add to this list, bump it.
+something that was broken isn't. The major is for a change in what she is
+rather than what she can do: 2.0.0 is where she stopped being something he
+starts. It stayed at 1.0.0 for three releases because nothing read it, so if
+you add to this list, bump it.
 
 | Version | What she gained |
 | --- | --- |
@@ -722,3 +782,4 @@ nothing read it, so if you add to this list, bump it.
 | 1.4.1 | Speaking and listening on by default, because remembering a variable to be spoken to was the surprise, not the speech. The first and last sentence of every reply now get checked before it goes out, which is where she was still giving herself away. |
 | 1.5.0 | A second face: a hub in the browser, with her own voice and her own ears behind it rather than the browser's. |
 | 1.6.0 | A screen. She writes a page — a schematic, a chart, a clickable diagram — and puts it on the hub's stage, and what he does on it comes back to her as words. The page gets a key that opens one route and a CSP that closes the rest. |
+| 2.0.0 | Always on. She starts with Windows, hidden, at one address worth pinning, and idles at 430MB instead of 1.5GB because the speech models wait until they are wanted. The major number is the point: she stopped being something he starts. Booting her from a clean environment is also what found the effort bug that would have made every turn a 400. |

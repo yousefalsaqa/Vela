@@ -368,6 +368,93 @@ describe("createTranscriber", () => {
     h.ears.stop();
   });
 
+  describe("lazily", () => {
+    const lazyHarness = (reply: (request: Record<string, string>) => string | undefined) => {
+      const fake = fakeSpawner(({ proc }) => respondToRequests(proc, reply));
+      const ears = createTranscriber({
+        python: "python.exe",
+        worker: "whisper_worker.py",
+        lazy: true,
+        spawn: fake.spawn,
+      });
+      return { ears, fake };
+    };
+
+    test("costs nothing until something is actually said", () => {
+      // She runs from boot now. A hub nobody has spoken into must not hold
+      // 226MB of resident whisper all day waiting for a microphone press.
+      const { fake } = lazyHarness(() => "ok {}");
+      assert.equal(fake.spawned.length, 0, "an unused microphone must not load a model");
+    });
+
+    test("starts the worker on the first utterance, and returns what it heard", async () => {
+      const { ears, fake } = lazyHarness(heard("open the fantasy project"));
+      assert.equal(await ears.hear(Buffer.from([1, 2, 3, 4])), "open the fantasy project");
+      assert.equal(fake.spawned.length, 1);
+      assert.deepEqual(fake.last().args, ["whisper_worker.py", "base.en", "cpu", ""]);
+      ears.stop();
+    });
+
+    test("stays warm after that, rather than reloading per utterance", async () => {
+      // The whole reason the worker exists: 1.4s cold against 0.4s warm.
+      const { ears, fake } = lazyHarness(heard("again"));
+      await ears.hear(Buffer.from([1, 2, 3, 4]));
+      await ears.hear(Buffer.from([5, 6, 7, 8]));
+      assert.equal(fake.spawned.length, 1, "a second spawn would pay the model load twice");
+      ears.stop();
+    });
+
+    test("can be warmed while he is still talking, so the load costs nothing", () => {
+      // The hub calls this when recording starts. Opening the microphone and
+      // saying a sentence takes seconds; the model loads inside that.
+      const { ears, fake } = lazyHarness(heard("ready"));
+      ears.warm();
+      assert.equal(fake.spawned.length, 1);
+      ears.stop();
+    });
+
+    test("warming twice is not two workers", () => {
+      const { ears, fake } = lazyHarness(heard("ready"));
+      ears.warm();
+      ears.warm();
+      assert.equal(fake.spawned.length, 1);
+      ears.stop();
+    });
+
+    test("warming after stopping starts nothing", () => {
+      const { ears, fake } = lazyHarness(heard("ready"));
+      ears.stop();
+      ears.warm();
+      assert.equal(fake.spawned.length, 0, "a stopped service must stay stopped");
+    });
+
+    test("stopping before anything was said starts nothing", () => {
+      const { ears, fake } = lazyHarness(() => "ok {}");
+      ears.stop();
+      assert.equal(fake.spawned.length, 0);
+    });
+
+    test("stopping ends the worker it did start", async () => {
+      const { ears, fake } = lazyHarness(heard("hello"));
+      await ears.hear(Buffer.from([1, 2, 3, 4]));
+      ears.stop();
+      assert.equal(fake.last().proc.killed, true, "a stopped service must not leave whisper resident");
+    });
+
+    test("says nothing more after being stopped", async () => {
+      const { ears } = lazyHarness(heard("too late"));
+      ears.stop();
+      assert.equal(await ears.hear(Buffer.from([1, 2, 3, 4])), "");
+    });
+
+    test("silence is not worth starting a model for", async () => {
+      const { ears, fake } = lazyHarness(heard("nothing"));
+      assert.equal(await ears.hear(Buffer.alloc(0)), "");
+      assert.equal(fake.spawned.length, 0, "an empty recording must not load whisper");
+      ears.stop();
+    });
+  });
+
   test("defaults to base.en on cpu when it wasn't told otherwise", () => {
     const fake = fakeSpawner();
     createTranscriber({ python: "python.exe", worker: "whisper_worker.py", spawn: fake.spawn });
@@ -445,6 +532,20 @@ describe("cliTranscriber", () => {
     };
     const ears = cliTranscriber({ run });
     assert.equal(await ears.hear(Buffer.alloc(0)), "");
+    assert.equal(ran, false);
+    ears.stop();
+  });
+
+  test("warming it does nothing, because this path has nothing to keep", async () => {
+    // It reloads the model per utterance by design, so the hub's warm call
+    // must be harmless here rather than an error the service has to guard.
+    let ran = false;
+    const run = async () => {
+      ran = true;
+      return { stdout: "", stderr: "" };
+    };
+    const ears = cliTranscriber({ run });
+    assert.doesNotThrow(() => ears.warm());
     assert.equal(ran, false);
     ears.stop();
   });

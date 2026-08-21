@@ -440,6 +440,27 @@ describe("sessionOptions", () => {
     assert.equal("thinking" in sessionOptions({ systemPrompt: "", thinking: true }), false);
   });
 
+  test("caps the effort when thinking is off, because the pair is refused", () => {
+    // Claude Code's own settings.json carries effortLevel: xhigh, and the SDK
+    // inherits it. With thinking disabled that combination is a 400 on every
+    // single turn: "effort 'xhigh' is not supported when thinking is
+    // disabled". Launched from a shell that had already overridden it this
+    // never showed; launched clean from the scheduled task, she was mute.
+    assert.equal(sessionOptions({ systemPrompt: "" }).effort, "high");
+  });
+
+  test("leaves the effort to the SDK once thinking is on, where xhigh is legal", () => {
+    assert.equal("effort" in sessionOptions({ systemPrompt: "", thinking: true }), false);
+  });
+
+  test("takes an effort it was given, so he can spend more or less on a turn", () => {
+    assert.equal(sessionOptions({ systemPrompt: "", effort: "low" }).effort, "low");
+    assert.equal(
+      sessionOptions({ systemPrompt: "", thinking: true, effort: "max" }).effort,
+      "max",
+    );
+  });
+
   test("streams partial messages, which is what lets her talk as she writes", () => {
     assert.equal(sessionOptions({ systemPrompt: "" }).includePartialMessages, true);
   });

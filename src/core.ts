@@ -48,6 +48,8 @@ export interface CoreOptions {
   /** Undefined leaves the SDK on its own default. */
   model?: string;
   thinking?: boolean;
+  /** How hard she works a turn. See sessionOptions for why this has to be set. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Skill names the session may reach for. Empty means none are offered. */
   skills?: string[];
   /** The heartbeat's own, shorter list — it runs unsupervised. */
@@ -91,7 +93,15 @@ export function sessionOptions(opts: CoreOptions): Record<string, unknown> {
     // config.ts, so one she wrote for herself is hers on the next start.
     ...(opts.skills?.length ? { skills: opts.skills } : {}),
     ...(opts.model ? { model: opts.model } : {}),
-    ...(opts.thinking ? {} : { thinking: { type: "disabled" as const } }),
+    // Thinking off is what keeps a spoken turn under two seconds, and the
+    // effort has to come with it. The SDK inherits effortLevel from Claude
+    // Code's settings.json, and xhigh with thinking disabled is refused
+    // outright: every turn comes back as "API Error: 400". Started from a
+    // shell that had already set it, this never appeared; started clean from
+    // the scheduled task at logon, she answered nothing else.
+    ...(opts.thinking
+      ? { ...(opts.effort ? { effort: opts.effort } : {}) }
+      : { thinking: { type: "disabled" as const }, effort: opts.effort ?? "high" }),
     cwd: process.cwd(),
     includePartialMessages: true,
   };

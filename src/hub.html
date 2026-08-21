@@ -945,12 +945,24 @@ function speakRest(t) {
   }
 }
 
+/* "She is about to need this." Her speech models are held back until first
+   use, so an idle Vela is ~460MB rather than 1.5GB. Saying so at the gesture
+   rather than at the sentence is what keeps that free: the load happens while
+   he is still talking, or still reading. */
+function warm(what) {
+  fetch("/warm", {
+    method: "POST",
+    headers: Object.assign({ "content-type": "application/json" }, auth),
+    body: JSON.stringify({ what: what }),
+  }).catch(() => {});
+}
+
 earKey.addEventListener("click", () => {
   speaking = !speaking;
   earKey.setAttribute("aria-pressed", String(speaking));
   // Inside the click, because this is the gesture the browser wants before it
   // will let the page make noise.
-  if (speaking) ears();
+  if (speaking) { ears(); warm("voice"); }
   else hush();
   animate(earKey, { scale: [0.84, 1], duration: 320, ease: "outBack" });
 });
@@ -964,6 +976,9 @@ async function startListening() {
   /* Talking over her is an answer in itself: she has said enough. Stop her
      mid-word, and remember it so the next turn carries the reason. */
   if (speakingNow || audioQueue.length) { hush(); cutOff = true; }
+
+  // Whisper loads while he is still talking, which is the whole gap it needs.
+  warm("ears");
 
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });

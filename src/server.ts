@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { writeFileSync, rmSync, readFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CoreEvent } from "./core.js";
 import { current, contentTypeFor, type Screen } from "./screen.js";
@@ -39,6 +39,16 @@ export function readEndpoint(file = ENDPOINT_FILE): Endpoint | null {
   }
 }
 
+/** Her durable key, if she has been started with `keepToken` before. */
+function readToken(file: string): string | null {
+  try {
+    const saved = readFileSync(file, "utf8").trim();
+    return saved.length >= 32 ? saved : null;
+  } catch {
+    return null; // first ever start
+  }
+}
+
 export interface ServeOptions {
   core: ServableCore;
   port?: number;
@@ -54,6 +64,24 @@ export interface ServeOptions {
   render?: (text: string) => Promise<Buffer | null>;
   /** What is on the screen. Defaults to the real screen module; tests inject. */
   screen?: () => Screen | null;
+  /**
+   * Start loading a speech model before it is needed.
+   *
+   * The models are held back until first use, which is what keeps an
+   * always-on Vela at ~460MB instead of 1.5GB. The hub knows he is about to
+   * need one before the audio exists — he pressed record, he switched sound
+   * on — so the load happens in that gap rather than as a wait afterwards.
+   */
+  warm?: (what: "ears" | "voice") => void;
+  /**
+   * Reuse the last run's token instead of minting a new one.
+   *
+   * A random token per start is right for a thing you launch and read a link
+   * from. It is wrong for a thing that runs from boot: the hub could never be
+   * bookmarked, pinned to the taskbar, or opened by a hotkey, because its
+   * address changed every restart. Kept, the address is permanent.
+   */
+  keepToken?: boolean;
 }
 
 export interface RunningServer {
@@ -101,9 +129,14 @@ function collect(
 
 export function serve(opts: ServeOptions): Promise<RunningServer> {
   const endpointFile = opts.endpointFile ?? ENDPOINT_FILE;
-  const token = randomBytes(24).toString("hex");
+  // The endpoint file says "she is running, here" and is removed when she
+  // stops. Her key outlives that, so it lives beside it in its own file.
+  const tokenFile = join(dirname(endpointFile), "hub-token");
+  const token = opts.keepToken
+    ? (readToken(tokenFile) ?? randomBytes(24).toString("hex"))
+    : randomBytes(24).toString("hex");
   const name = opts.name ?? "Vela";
-  const clients = new Set<{ write: (chunk: string) => void }>();
+  const clients = new Set<{ write: (chunk: string) => void; end: () => void }>();
   const screenState = opts.screen ?? current;
 
   /**
@@ -249,6 +282,29 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
       return;
     }
 
+    // "He is about to need this." Answered immediately; the loading happens
+    // behind it, and a service with nothing to warm still says yes so the hub
+    // does not have to know which halves exist.
+    if (req.method === "POST" && path === "/warm") {
+      collect(req, (body) => {
+        let what = "";
+        try {
+          what = (JSON.parse(body.toString("utf8") || "{}") as { what?: string }).what ?? "";
+        } catch {
+          /* handled as unknown below */
+        }
+        if (what !== "ears" && what !== "voice") {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "what must be 'ears' or 'voice'" }));
+          return;
+        }
+        opts.warm?.(what);
+        res.writeHead(202, { "content-type": "application/json" });
+        res.end(JSON.stringify({ warming: what }));
+      });
+      return;
+    }
+
     // What he just said into the browser, as words.
     if (req.method === "POST" && path === "/hear") {
       if (!opts.hear) {
@@ -318,7 +374,9 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
         connection: "keep-alive",
       });
       res.write(": connected\n\n");
-      const client = { write: (chunk: string) => res.write(chunk) };
+      // end() is what tells an attached REPL she is going away, rather than
+      // leaving it holding a stream that has quietly stopped saying anything.
+      const client = { write: (chunk: string) => res.write(chunk), end: () => res.end() };
       clients.add(client);
       req.on("close", () => clients.delete(client));
       return;
@@ -380,6 +438,14 @@ ${text}` : text);
   });
 
   return new Promise((fulfil) => {
+    // A fixed port is what makes her address permanent, and it is also the one
+    // thing that could stop her coming up at boot. If something already holds
+    // it, take any free port rather than not existing.
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code !== "EADDRINUSE") throw err;
+      server.listen(0, "127.0.0.1");
+    });
+
     server.listen(opts.port ?? 0, "127.0.0.1", () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
@@ -387,6 +453,9 @@ ${text}` : text);
 
       mkdirSync(dirname(endpointFile), { recursive: true });
       writeFileSync(endpointFile, JSON.stringify(endpoint, null, 2));
+      // Written only when she was asked to keep it, so an ordinary run never
+      // leaves a reusable key on disk.
+      if (opts.keepToken) writeFileSync(tokenFile, token, "utf8");
 
       fulfil({
         endpoint,
@@ -395,7 +464,7 @@ ${text}` : text);
             unsubscribe();
             for (const c of clients) {
               try {
-                (c as { end?: () => void }).end?.();
+                c.end();
               } catch {
                 /* already gone */
               }

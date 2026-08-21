@@ -299,6 +299,14 @@ export function wavFromPcm(pcm: Buffer, rate = SAMPLE_RATE): Buffer {
 export interface Transcriber {
   /** Raw 16 kHz mono samples in, what was said out. */
   hear: (pcm: Buffer) => Promise<string>;
+  /**
+   * Start loading the model now, if it isn't already.
+   *
+   * Only means anything to a lazy one. The hub calls it when recording
+   * starts, so the load happens while he is still talking rather than after
+   * he stops.
+   */
+  warm: () => void;
   stop: () => void;
 }
 
@@ -319,6 +327,16 @@ export function createTranscriber(opts: {
   computeDevice?: string;
   /** Words to bias the decoder towards; see WHISPER_VOCABULARY. */
   vocabulary?: string;
+  /**
+   * Hold the model load until the first utterance.
+   *
+   * The terminal wants it eager: he presses Enter and talks, and the 1.4s
+   * would land in the middle of that. A service running from boot wants the
+   * opposite, because most days nothing is ever said into the hub and an
+   * idle 226MB is the whole cost of her being always-on. Warm either way
+   * once it has started.
+   */
+  lazy?: boolean;
   onProblem?: (why: string) => void;
   spawn?: Spawner;
 }): Transcriber {
@@ -334,43 +352,56 @@ export function createTranscriber(opts: {
     opts.onProblem?.(why);
   };
 
-  const worker = spawn(
-    opts.python,
-    [
-      opts.worker,
-      opts.model ?? "base.en",
-      opts.computeDevice ?? "cpu",
-      opts.vocabulary ?? "",
-    ],
-    { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] },
-  );
-  worker.on("error", (err) => complain(`couldn't start whisper: ${err.message}`));
-
   const waiting: ((line: string) => void)[] = [];
-  let buffered = "";
-  worker.stdout?.setEncoding("utf8");
-  worker.stdout?.on("data", (chunk: string) => {
-    buffered += chunk;
-    for (;;) {
-      const cut = buffered.indexOf("\n");
-      if (cut < 0) break;
-      const line = buffered.slice(0, cut).trim();
-      buffered = buffered.slice(cut + 1);
-      // The loader prints its own warnings to stdout; only the protocol counts.
-      if (!line.startsWith("ok ") && !line.startsWith("err ")) continue;
-      waiting.shift()?.(line);
-    }
-  });
+
+  /** The worker, started at most once. */
+  let worker: ChildProcess | null = null;
+  const ensureWorker = (): ChildProcess => {
+    if (worker) return worker;
+    const started = spawn(
+      opts.python,
+      [
+        opts.worker,
+        opts.model ?? "base.en",
+        opts.computeDevice ?? "cpu",
+        opts.vocabulary ?? "",
+      ],
+      { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] },
+    );
+    started.on("error", (err) => complain(`couldn't start whisper: ${err.message}`));
+
+    let buffered = "";
+    started.stdout?.setEncoding("utf8");
+    started.stdout?.on("data", (chunk: string) => {
+      buffered += chunk;
+      for (;;) {
+        const cut = buffered.indexOf("\n");
+        if (cut < 0) break;
+        const line = buffered.slice(0, cut).trim();
+        buffered = buffered.slice(cut + 1);
+        // The loader prints its own warnings to stdout; only the protocol counts.
+        if (!line.startsWith("ok ") && !line.startsWith("err ")) continue;
+        waiting.shift()?.(line);
+      }
+    });
+
+    worker = started;
+    return started;
+  };
+
+  if (!opts.lazy) ensureWorker();
 
   return {
     async hear(pcm: Buffer) {
-      if (stopped || !pcm.length || !worker.stdin?.writable) return "";
+      if (stopped || !pcm.length) return "";
+      const live = ensureWorker();
+      if (!live.stdin?.writable) return "";
       const file = join(dir, `${n++}.pcm`);
       writeFileSync(file, normalise(pcm));
 
       const status = await new Promise<string>((done) => {
         waiting.push(done);
-        worker.stdin!.write(`${JSON.stringify({ pcm: file, rate: SAMPLE_RATE })}\n`);
+        live.stdin!.write(`${JSON.stringify({ pcm: file, rate: SAMPLE_RATE })}\n`);
         setTimeout(() => done("err timed out"), 120_000).unref?.();
       });
       rmSync(file, { force: true });
@@ -388,10 +419,14 @@ export function createTranscriber(opts: {
       }
     },
 
+    warm() {
+      if (!stopped) ensureWorker();
+    },
+
     stop() {
       stopped = true;
-      worker.stdin?.end();
-      worker.kill();
+      worker?.stdin?.end();
+      worker?.kill();
       try {
         rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       } catch {
@@ -419,6 +454,9 @@ export function cliTranscriber(opts: ListenOptions = {}): Transcriber {
         rmSync(wav, { force: true });
       }
     },
+    // Nothing to keep warm: this path loads the model per utterance, which is
+    // the whole reason the worker above exists.
+    warm() {},
     stop() {
       rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     },

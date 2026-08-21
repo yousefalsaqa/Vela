@@ -102,6 +102,79 @@ describe("the local server", () => {
     assert.equal(readEndpoint(join(dir, "nope.json")), null);
   });
 
+  describe("a stable address", () => {
+    test("keeps the token from the last run, so a pinned hub link keeps working", async () => {
+      // Without this the token is new every start, and an assistant that runs
+      // from boot can never be bookmarked, pinned, or given a hotkey.
+      await running.close();
+      const first = await serve({ core: fake.core, endpointFile, keepToken: true });
+      const key = first.endpoint.token;
+      await first.close();
+
+      running = await serve({ core: fake.core, endpointFile, keepToken: true });
+      assert.equal(running.endpoint.token, key, "a rotated token breaks the pinned link");
+    });
+
+    test("mints a fresh one when there is nothing to keep", async () => {
+      const clean = join(mkdtempSync(join(tmpdir(), "vela-first-")), "first-ever.json");
+      const started = await serve({ core: fake.core, endpointFile: clean, keepToken: true });
+      assert.ok(started.endpoint.token.length >= 32);
+      await started.close();
+    });
+
+    test("a truncated key file is replaced rather than trusted", async () => {
+      // A half-written file after a bad shutdown must not become a weak key
+      // on a service that has the whole machine.
+      const only = mkdtempSync(join(tmpdir(), "vela-badkey-"));
+      writeFileSync(join(only, "hub-token"), "tooshort", "utf8");
+      const started = await serve({
+        core: fake.core,
+        endpointFile: join(only, "server.json"),
+        keepToken: true,
+      });
+      assert.ok(started.endpoint.token.length >= 32, "a guessable token is worse than a changed link");
+      await started.close();
+      rmSync(only, { recursive: true, force: true });
+    });
+
+    test("an ordinary run leaves no reusable key on disk", async () => {
+      const only = mkdtempSync(join(tmpdir(), "vela-nokey-"));
+      const started = await serve({ core: fake.core, endpointFile: join(only, "server.json") });
+      await started.close();
+      assert.equal(existsSync(join(only, "hub-token")), false);
+      rmSync(only, { recursive: true, force: true });
+    });
+
+    test("rotates the token when it wasn't asked to keep it", async () => {
+      const first = running.endpoint.token;
+      await running.close();
+      running = await serve({ core: fake.core, endpointFile });
+      assert.notEqual(running.endpoint.token, first);
+    });
+
+    test("takes the port it was given, so the address is the same every boot", async () => {
+      await running.close();
+      // 0 asks the OS for a free one; anything else is a fixed address.
+      running = await serve({ core: fake.core, endpointFile, port: 0 });
+      const chosen = running.endpoint.port;
+      await running.close();
+      running = await serve({ core: fake.core, endpointFile, port: chosen });
+      assert.equal(running.endpoint.port, chosen);
+    });
+
+    test("falls back to any free port rather than refusing to start", async () => {
+      // Something else on his machine holding 4823 must not be what stops her
+      // coming up at boot.
+      const squatter = await serve({ core: fake.core, endpointFile: join(dir, "squat.json") });
+      const taken = squatter.endpoint.port;
+      const hers = await serve({ core: fake.core, endpointFile: join(dir, "hers.json"), port: taken });
+      assert.ok(hers.endpoint.port > 0);
+      assert.notEqual(hers.endpoint.port, taken, "she must not fight for a busy port");
+      await hers.close();
+      await squatter.close();
+    });
+  });
+
   describe("the token", () => {
     const url = (r: RunningServer, path: string) => `http://127.0.0.1:${r.endpoint.port}${path}`;
 
@@ -178,6 +251,33 @@ describe("the local server", () => {
         () => connect({ port: running.endpoint.port, token: "wrong", pid: 0 }),
         /could not open the event stream \(401\)/,
       );
+    });
+
+    test("shutting down ends the streams rather than leaving clients hanging", async () => {
+      // An attached REPL holding a stream that has quietly stopped speaking
+      // looks exactly like her thinking for ever.
+      const client = await connect(running.endpoint);
+      await until(() => fake.listenerCount() > 0, "the server to subscribe");
+      await running.close();
+      assert.equal(fake.listenerCount(), 0, "she must let go of the core on the way out");
+      client.stop();
+      running = await serve({ core: fake.core, endpointFile }); // for afterEach
+    });
+
+    test("a client that hung up mid-broadcast does not take the others down", async () => {
+      const a = await connect(running.endpoint);
+      const b = await connect(running.endpoint);
+      const seenB: CoreEvent[] = [];
+      b.subscribe((e) => seenB.push(e));
+      await until(() => fake.listenerCount() > 0, "subscription");
+
+      a.stop(); // he closed the tab mid-turn
+      fake.emit({ type: "delta", text: "still going" });
+      fake.emit({ type: "result", ms: 5 });
+      await until(() => seenB.length === 2, "the surviving client to hear both");
+
+      assert.deepEqual(seenB.at(-1), { type: "result", ms: 5 });
+      b.stop();
     });
 
     test("two clients both see everything", async () => {
@@ -333,6 +433,17 @@ describe("ears and a voice", () => {
     assert.equal(health.canSpeak, false);
   });
 
+  test("reports each half on its own, so the hub can draw one button and not the other", async () => {
+    // Kokoro's venv missing and whisper's present is a real state of this
+    // machine, and a hub that offered a speaker anyway would be a dead button.
+    await up({ hear: async () => "heard" });
+    const health = (await (
+      await fetch(at(`/health?k=${running.endpoint.token}`))
+    ).json()) as { canHear: boolean; canSpeak: boolean };
+    assert.equal(health.canHear, true);
+    assert.equal(health.canSpeak, false);
+  });
+
   test("a service with no ears refuses rather than pretending", async () => {
     await up();
     const res = await fetch(at(`/hear?k=${running.endpoint.token}`), {
@@ -411,6 +522,58 @@ describe("ears and a voice", () => {
       await fetch(at(`/health?k=${running.endpoint.token}`))
     ).json()) as { name: string };
     assert.equal(health.name, "Jarvis");
+  });
+
+  describe("warming", () => {
+    test("asks for whichever half he is about to use", async () => {
+      const warmed: string[] = [];
+      await up({ warm: (what: "ears" | "voice") => warmed.push(what) });
+      const call = (what: string) =>
+        fetch(at(`/warm?k=${running.endpoint.token}`), {
+          method: "POST",
+          body: JSON.stringify({ what }),
+        });
+
+      assert.equal((await call("ears")).status, 202);
+      assert.equal((await call("voice")).status, 202);
+      assert.deepEqual(warmed, ["ears", "voice"]);
+    });
+
+    test("ignores anything that is not one of the two", async () => {
+      const warmed: string[] = [];
+      await up({ warm: (what: "ears" | "voice") => warmed.push(what) });
+      const res = await fetch(at(`/warm?k=${running.endpoint.token}`), {
+        method: "POST",
+        body: JSON.stringify({ what: "everything" }),
+      });
+      assert.equal(res.status, 400);
+      assert.deepEqual(warmed, []);
+    });
+
+    test("a service with nothing to warm still answers, so the hub need not care", async () => {
+      await up();
+      const res = await fetch(at(`/warm?k=${running.endpoint.token}`), {
+        method: "POST",
+        body: JSON.stringify({ what: "voice" }),
+      });
+      assert.equal(res.status, 202);
+    });
+
+    test("stays behind the token like everything else", async () => {
+      await up({ warm: () => {} });
+      assert.equal((await fetch(at("/warm"), { method: "POST" })).status, 401);
+    });
+
+    test("a body that is not JSON is refused rather than crashed on", async () => {
+      const warmed: string[] = [];
+      await up({ warm: (what: "ears" | "voice") => warmed.push(what) });
+      const res = await fetch(at(`/warm?k=${running.endpoint.token}`), {
+        method: "POST",
+        body: "not json",
+      });
+      assert.equal(res.status, 400);
+      assert.deepEqual(warmed, []);
+    });
   });
 
   test("a render that comes back empty is reported, not played as silence", async () => {
@@ -641,6 +804,12 @@ describe("the screen, served", () => {
     fake.emit({ type: "show", screen: null });
     shown = null;
     assert.equal((await fetch(at(`/screen/file?s=${s}`))).status, 401);
+  });
+
+  test("an empty key is not a key, however the page came by it", async () => {
+    put("engine.html");
+    await meta();
+    assert.equal((await fetch(at("/screen/file?s="))).status, 401);
   });
 
   test("the master token still reads the file, for debugging with curl", async () => {

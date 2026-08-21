@@ -721,47 +721,75 @@ export function kokoroSynth(opts: {
   worker: string;
   voice?: string;
   speed?: number;
+  /**
+   * Hold the model until the first sentence.
+   *
+   * Kokoro is about 1.1GB resident, and the service loads it for the hub's
+   * speaker button. Running from boot, that is the largest single cost of her
+   * being always-on, paid every day whether or not anyone asks her to speak
+   * out loud. The terminal keeps its own eager copy, where the 1.2s load
+   * would otherwise land in the middle of a conversation.
+   */
+  lazy?: boolean;
   onProblem?: (why: string) => void;
   spawn?: Spawner;
-}): { render: (text: string) => Promise<Buffer | null>; stop: () => void } {
+}): {
+  render: (text: string) => Promise<Buffer | null>;
+  /** Start the model load now. The hub calls this when he switches sound on. */
+  warm: () => void;
+  stop: () => void;
+} {
   const spawn = opts.spawn ?? realSpawn;
   const dir = mkdtempSync(join(tmpdir(), "vela-synth-"));
   let stopped = false;
   let n = 0;
   let queue: Promise<unknown> = Promise.resolve();
 
-  const worker = spawn(
-    opts.python,
-    [opts.worker, opts.voice ?? "bf_emma", String(opts.speed ?? 1.1)],
-    {
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "ignore"],
-      env: { ...process.env, VIRTUAL_ENV: join(opts.python, "..", "..") },
-    },
-  );
-  worker.on("error", (err) => opts.onProblem?.(`couldn't start Kokoro: ${err.message}`));
-
   const waiting: ((line: string) => void)[] = [];
-  let buffered = "";
-  worker.stdout?.setEncoding("utf8");
-  worker.stdout?.on("data", (chunk: string) => {
-    buffered += chunk;
-    for (;;) {
-      const cut = buffered.indexOf("\n");
-      if (cut < 0) break;
-      const line = buffered.slice(0, cut).trim();
-      buffered = buffered.slice(cut + 1);
-      if (!line.startsWith("ok ") && !line.startsWith("err ")) continue;
-      waiting.shift()?.(line);
-    }
-  });
+
+  /** The worker, started at most once. */
+  let worker: ChildProcess | null = null;
+  const ensureWorker = (): ChildProcess => {
+    if (worker) return worker;
+    const started = spawn(
+      opts.python,
+      [opts.worker, opts.voice ?? "bf_emma", String(opts.speed ?? 1.1)],
+      {
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "ignore"],
+        env: { ...process.env, VIRTUAL_ENV: join(opts.python, "..", "..") },
+      },
+    );
+    started.on("error", (err) => opts.onProblem?.(`couldn't start Kokoro: ${err.message}`));
+
+    let buffered = "";
+    started.stdout?.setEncoding("utf8");
+    started.stdout?.on("data", (chunk: string) => {
+      buffered += chunk;
+      for (;;) {
+        const cut = buffered.indexOf("\n");
+        if (cut < 0) break;
+        const line = buffered.slice(0, cut).trim();
+        buffered = buffered.slice(cut + 1);
+        if (!line.startsWith("ok ") && !line.startsWith("err ")) continue;
+        waiting.shift()?.(line);
+      }
+    });
+
+    worker = started;
+    return started;
+  };
+
+  if (!opts.lazy) ensureWorker();
 
   const one = async (text: string): Promise<Buffer | null> => {
-    if (stopped || !worker.stdin?.writable) return null;
+    if (stopped) return null;
+    const live = ensureWorker();
+    if (!live.stdin?.writable) return null;
     const file = join(dir, `${n++}.wav`);
     const status = await new Promise<string>((done) => {
       waiting.push(done);
-      worker.stdin!.write(`${JSON.stringify({ text, out: file })}\n`);
+      live.stdin!.write(`${JSON.stringify({ text, out: file })}\n`);
       setTimeout(() => done("err timed out"), 30_000).unref?.();
     });
     if (!status.startsWith("ok ") || !existsSync(file)) {
@@ -785,10 +813,13 @@ export function kokoroSynth(opts: {
       queue = mine.catch(() => {});
       return mine;
     },
+    warm() {
+      if (!stopped) ensureWorker();
+    },
     stop() {
       stopped = true;
-      worker.stdin?.end();
-      worker.kill();
+      worker?.stdin?.end();
+      worker?.kill();
       try {
         rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       } catch {

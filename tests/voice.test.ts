@@ -11,6 +11,7 @@ import {
   pcmFromWav,
   pcmPlayer,
   kokoroSpeaker,
+  kokoroSynth,
   neuralSpeaker,
   windowsSpeaker,
   PRONOUNCE_PHONEMES,
@@ -290,6 +291,29 @@ describe("pcmPlayer", () => {
     assert.equal(fake.spawned.length, 0);
   });
 
+  test("stopping kills the player mid-sentence, which is what talking over her needs", () => {
+    // Being interrupted has to be immediate. Waiting for the current sentence
+    // to finish is exactly the thing he interrupted to avoid.
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ spawn: fake.spawn });
+    player.write(samples);
+    player.stop();
+    assert.equal(fake.last().proc.killed, true);
+  });
+
+  test("says nothing more after being stopped", () => {
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ spawn: fake.spawn });
+    player.stop();
+    player.write(samples);
+    assert.equal(fake.spawned.length, 0, "a stopped player must not open the device again");
+  });
+
+  test("stopping before anything played is not an error", () => {
+    const fake = fakeSpawner();
+    assert.doesNotThrow(() => pcmPlayer({ spawn: fake.spawn }).stop());
+  });
+
   test("draining closes the stream and waits for the tail to play out", async () => {
     const fake = fakeSpawner();
     const player = pcmPlayer({ spawn: fake.spawn });
@@ -337,6 +361,170 @@ describe("pcmPlayer", () => {
     await settle();
 
     assert.match(problems[0] ?? "", /ffplay/, "silence must not be the only symptom");
+  });
+});
+
+describe("kokoroSynth", () => {
+  // The hub's voice: a sentence in, a wav back, no player involved.
+  const harness = (lazy?: boolean) => {
+    const problems: string[] = [];
+    const fake = fakeSpawner(({ proc }) =>
+      respondToRequests(proc, (request) => {
+        writeFileSync(request.out, wavFromPcm(Buffer.from([1, 2, 3, 4]), 24_000));
+        return `ok ${request.out}`;
+      }),
+    );
+    const mouth = kokoroSynth({
+      python: "python.exe",
+      worker: "kokoro_worker.py",
+      ...(lazy === undefined ? {} : { lazy }),
+      spawn: fake.spawn,
+      onProblem: (why: string) => problems.push(why),
+    });
+    return { mouth, fake, problems };
+  };
+
+  test("renders a sentence to a wav", async () => {
+    const h = harness();
+    const wav = await h.mouth.render("Loud and clear.");
+    assert.ok(wav?.length, "the hub plays these bytes");
+    assert.equal(wav.subarray(0, 4).toString("ascii"), "RIFF");
+    h.mouth.stop();
+  });
+
+  test("starts the worker eagerly by default, the way the terminal wants it", () => {
+    const h = harness();
+    assert.equal(h.fake.spawned.length, 1);
+    h.mouth.stop();
+  });
+
+  test("starts on the voice and speed it was given", () => {
+    const fake = fakeSpawner();
+    kokoroSynth({
+      python: "python.exe",
+      worker: "kokoro_worker.py",
+      voice: "bf_isabella",
+      speed: 1.3,
+      spawn: fake.spawn,
+    });
+    assert.deepEqual(fake.last().args, ["kokoro_worker.py", "bf_isabella", "1.3"]);
+  });
+
+  test("reports a sentence the worker refused, rather than returning silence", async () => {
+    const problems: string[] = [];
+    const fake = fakeSpawner(({ proc }) => respondToRequests(proc, () => "err out of memory"));
+    const mouth = kokoroSynth({
+      python: "python.exe",
+      worker: "kokoro_worker.py",
+      spawn: fake.spawn,
+      onProblem: (why: string) => problems.push(why),
+    });
+    assert.equal(await mouth.render("Anything."), null);
+    assert.match(problems[0] ?? "", /out of memory/);
+    mouth.stop();
+  });
+
+  test("a worker that says ok but writes nothing is a failure, not a wav", async () => {
+    const problems: string[] = [];
+    const fake = fakeSpawner(({ proc }) =>
+      respondToRequests(proc, (request) => `ok ${request.out}`),
+    );
+    const mouth = kokoroSynth({
+      python: "python.exe",
+      worker: "kokoro_worker.py",
+      spawn: fake.spawn,
+      onProblem: (why: string) => problems.push(why),
+    });
+    assert.equal(await mouth.render("Anything."), null);
+    assert.equal(problems.length, 1);
+    mouth.stop();
+  });
+
+  test("a worker that won't start says so by name", async () => {
+    const problems: string[] = [];
+    const fake = fakeSpawner(({ proc }) => setImmediate(() => proc.fail("ENOENT")));
+    kokoroSynth({
+      python: "python.exe",
+      worker: "kokoro_worker.py",
+      spawn: fake.spawn,
+      onProblem: (why: string) => problems.push(why),
+    });
+    await settle();
+    assert.match(problems[0] ?? "", /couldn't start Kokoro/);
+  });
+
+  test("serialises two callers, because the worker answers in order", async () => {
+    // Two sentences interleaving would hand each caller the other's audio.
+    const h = harness();
+    const [first, second] = await Promise.all([h.mouth.render("One."), h.mouth.render("Two.")]);
+    assert.ok(first?.length);
+    assert.ok(second?.length);
+    h.mouth.stop();
+  });
+
+  describe("lazily", () => {
+    test("holds the model until something is actually said out loud", () => {
+      // Kokoro is ~1.1GB resident. She runs from boot and most days nobody
+      // presses the speaker button, so loading it at start is the single
+      // largest cost of her being always-on.
+      const h = harness(true);
+      assert.equal(h.fake.spawned.length, 0, "an unused voice must not hold 1.1GB");
+      h.mouth.stop();
+    });
+
+    test("loads on the first sentence and stays warm after it", async () => {
+      const h = harness(true);
+      assert.ok((await h.mouth.render("First."))?.length);
+      assert.ok((await h.mouth.render("Second."))?.length);
+      assert.equal(h.fake.spawned.length, 1, "a reload per sentence is what the worker exists to avoid");
+      h.mouth.stop();
+    });
+
+    test("can be warmed ahead of the first sentence, so the load is not heard as a delay", async () => {
+      // The hub calls this the moment he switches the speaker on, which is
+      // several seconds before there is anything to say. Measured: a cold
+      // first sentence is 4.6s against 0.3s warm.
+      const h = harness(true);
+      h.mouth.warm();
+      assert.equal(h.fake.spawned.length, 1, "warming is what moves the load off the first reply");
+      assert.ok((await h.mouth.render("Ready."))?.length);
+      assert.equal(h.fake.spawned.length, 1, "warming then speaking must not start two workers");
+      h.mouth.stop();
+    });
+
+    test("warming twice is not two workers", () => {
+      const h = harness(true);
+      h.mouth.warm();
+      h.mouth.warm();
+      assert.equal(h.fake.spawned.length, 1);
+      h.mouth.stop();
+    });
+
+    test("warming after stopping starts nothing", () => {
+      const h = harness(true);
+      h.mouth.stop();
+      h.mouth.warm();
+      assert.equal(h.fake.spawned.length, 0, "a stopped service must stay stopped");
+    });
+
+    test("stopping before she ever spoke starts nothing", () => {
+      const h = harness(true);
+      h.mouth.stop();
+      assert.equal(h.fake.spawned.length, 0);
+    });
+
+    test("stopping ends the worker it did start", async () => {
+      const h = harness(true);
+      await h.mouth.render("Something.");
+      h.mouth.stop();
+      assert.equal(h.fake.last().proc.killed, true, "a stopped service must not leave Kokoro resident");
+    });
+
+    test("says nothing after being stopped", async () => {
+      const h = harness(true);
+      h.mouth.stop();
+      assert.equal(await h.mouth.render("Too late."), null);
+    });
   });
 });
 
@@ -689,6 +877,21 @@ describe("createVoice", () => {
     voice.flush();
     voice.flush();
     assert.deepEqual(spoken, ["Done"]);
+  });
+
+  test("stopping drops what was half-said, so a cut-off turn doesn't leak into the next", () => {
+    const { spoken, voice } = harness();
+    voice.push("She was in the middle of");
+    voice.stop();
+    voice.flush();
+    assert.deepEqual(spoken, [], "the abandoned half must not surface a turn later");
+  });
+
+  test("a name is said the way he says it", () => {
+    const spoken: string[] = [];
+    const voice = createVoice((t) => spoken.push(t), [[/\bYousef\b/g, "YOO-sef"]]);
+    voice.push("Morning, Yousef. ");
+    assert.match(spoken[0] ?? "", /YOO-sef/, "every English voice reads it wrong by default");
   });
 });
 

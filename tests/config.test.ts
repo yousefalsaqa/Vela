@@ -10,6 +10,7 @@ import {
   switchedOn,
   claudeBinaryDir,
   ensureClaudeOnPath,
+  portFrom,
 } from "../src/config.js";
 
 /**
@@ -220,5 +221,28 @@ suite("switchedOn", () => {
   test("a typo keeps the default rather than silently taking her voice", () => {
     assert.equal(switchedOn("onn", true), true);
     assert.equal(switchedOn("", true), true);
+  });
+});
+
+suite("portFrom", () => {
+  test("defaults to her fixed port, which is what makes the hub pinnable", () => {
+    assert.equal(portFrom(undefined), 4823);
+  });
+
+  test("takes a port it was given", () => {
+    assert.equal(portFrom("5000"), 5000);
+    assert.equal(portFrom(" 5000 "), 5000);
+  });
+
+  test("keeps zero, because that is how you ask for any free port", () => {
+    assert.equal(portFrom("0"), 0);
+  });
+
+  test("a typo falls back rather than listening somewhere he can't guess", () => {
+    // Silently taking a random port would leave the pinned link dead with no
+    // clue why.
+    for (const junk of ["", "eight", "70000", "-1", "80.5"]) {
+      assert.equal(portFrom(junk), 4823, junk);
+    }
   });
 });

@@ -40,6 +40,7 @@ import {
   ensureClaudeOnPath,
   THINKING_ON,
   MODEL,
+  EFFORT,
   SKILLS,
   VOICE_ON,
   VOICE_ENGINE,
@@ -101,6 +102,7 @@ async function main() {
         heartbeatModel: HEARTBEAT_MODEL,
         model: MODEL,
         thinking: THINKING_ON,
+        effort: EFFORT,
         skills: SKILLS,
         heartbeatSkills: HEARTBEAT_SKILLS,
       });
