@@ -1,5 +1,8 @@
-import { test, describe, beforeEach } from "node:test";
+import { test, describe, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createCore,
   sessionOptions,
@@ -7,6 +10,7 @@ import {
   type Session,
 } from "../src/core.js";
 import { createStore, type Store } from "../src/memory.js";
+import { present, clear as clearScreen } from "../src/screen.js";
 
 /**
  * A scripted session: the test decides what the "model" emits, and when.
@@ -157,6 +161,7 @@ describe("createCore", () => {
     assert.equal(core.isBusy(), true, "the heartbeat must not cut in mid-turn");
     script.emit(result());
     await until(() => !core.isBusy(), "the turn to finish");
+    core.stop();
   });
 
   test("resets the streamed flag between turns", async () => {
@@ -215,6 +220,7 @@ describe("createCore", () => {
       let say: ((text: string) => void) | undefined;
       let isBusy: (() => boolean) | undefined;
       let model: string | undefined;
+      let skills: string[] | undefined;
       let onFire: ((ids: number[]) => void) | undefined;
       const checked: (number[] | undefined)[] = [];
       let heartbeatStopped = false;
@@ -226,6 +232,7 @@ describe("createCore", () => {
           say = opts.say as typeof say;
           isBusy = opts.isBusy as typeof isBusy;
           model = opts.model as string;
+          skills = opts.skills as string[];
           return {
             check: async (only?: number[]) => void checked.push(only),
             stop: () => void (heartbeatStopped = true),
@@ -245,6 +252,7 @@ describe("createCore", () => {
         busy: () => isBusy!(),
         fire: (ids: number[]) => onFire!(ids),
         model: () => model,
+        skills: () => skills,
         stopped: () => ({ heartbeat: heartbeatStopped, triggers: triggersStopped }),
       };
     };
@@ -294,6 +302,18 @@ describe("createCore", () => {
       a.core.stop();
     });
 
+    test("hands the heartbeat its own skill list, which is shorter on purpose", () => {
+      const a = ambient({ heartbeatSkills: ["agent-reach"] });
+      assert.deepEqual(a.skills(), ["agent-reach"]);
+      a.core.stop();
+    });
+
+    test("no heartbeat skills means an empty list, not the session's", () => {
+      const a = ambient();
+      assert.deepEqual(a.skills(), []);
+      a.core.stop();
+    });
+
     test("stopping shuts down both halves", () => {
       const a = ambient();
       a.core.stop();
@@ -304,6 +324,50 @@ describe("createCore", () => {
       const a = ambient();
       a.core.stop();
       assert.doesNotThrow(() => a.core.stop());
+    });
+  });
+
+  describe("the screen", () => {
+    // The screen module is process-global, which is the point: the tool
+    // handler and the core share it. These tests share it with them too.
+    const dir = mkdtempSync(join(tmpdir(), "vela-core-screen-"));
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    const page = (name: string) => {
+      const path = join(dir, name);
+      writeFileSync(path, "<p>hi</p>", "utf8");
+      return path;
+    };
+
+    beforeEach(() => {
+      clearScreen();
+    });
+
+    test("a presented screen reaches subscribers as a show event, without the path", () => {
+      const core = build();
+      present({ title: "The 21 sensors", path: page("sensors.html"), note: "why they drift" });
+      const show = events.find((e) => e.type === "show");
+      assert.ok(show, "a face that never hears about the screen cannot draw it");
+      assert.equal(show.screen?.title, "The 21 sensors");
+      assert.equal(show.screen?.note, "why they drift");
+      assert.equal("path" in (show.screen ?? {}), false, "the browser has no use for his filesystem layout");
+      core.stop();
+    });
+
+    test("clearing the screen shows as null, which is how the hub knows to close the stage", () => {
+      const core = build();
+      present({ title: "Up", path: page("up.html") });
+      clearScreen();
+      assert.deepEqual(events.at(-1), { type: "show", screen: null });
+      core.stop();
+    });
+
+    test("a stopped core no longer relays the screen", () => {
+      const core = build();
+      const mine: CoreEvent[] = [];
+      core.subscribe((e) => mine.push(e));
+      core.stop();
+      present({ title: "Too late", path: page("late.html") });
+      assert.equal(mine.some((e) => e.type === "show"), false);
     });
   });
 

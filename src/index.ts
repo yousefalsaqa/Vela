@@ -238,6 +238,17 @@ async function main() {
         break;
       }
 
+      case "show":
+        // The screen lives on the hub; the terminal just shouldn't be blind
+        // to it changing.
+        status.clear();
+        if (!atLineStart) stdout.write("\n");
+        stdout.write(
+          `\x1b[90m  · ${event.screen ? `on screen: ${event.screen.title}` : "screen cleared"}\x1b[0m\n`,
+        );
+        atLineStart = true;
+        break;
+
       case "say":
         // Unprompted. Don't eat whatever he's half-typed.
         status.clear();

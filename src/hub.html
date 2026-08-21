@@ -171,6 +171,77 @@ body[data-state="listening"] .wordmark em { color: var(--gold); }
 .unprompted p { margin: 0; font: 400 clamp(1.2rem, 2vw, 1.5rem)/1.4 "Instrument Serif", ui-serif, Georgia, serif; }
 .wrong { margin: 1rem 0; padding-left: .9rem; border-left: 2px solid var(--wrong); color: var(--wrong); font: 400 .78rem/1.5 "JetBrains Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
 
+/* ── the stage ────────────────────────────────────────────────────────────
+   Where she puts things: a schematic, a chart, a page with places to click.
+   It stands where the core floats, because showing something is what she is
+   doing instead of idling. The iframe is sandboxed to scripts only and its
+   URL carries a key that opens exactly one route, so the page inside can
+   draw and be clicked but cannot reach her. */
+.stage {
+  position: fixed;
+  z-index: 3;
+  top: 4.6rem;
+  right: clamp(1rem, 2.5vw, 2.2rem);
+  bottom: 1.2rem;
+  width: min(56vw, 64rem);
+  display: flex;
+  flex-direction: column;
+  background: rgba(6, 12, 17, .93);
+  border: 1px solid var(--rule);
+}
+.stage[hidden] { display: none; }
+.stage header {
+  display: flex;
+  align-items: baseline;
+  gap: .9rem;
+  padding: .6rem .95rem;
+  border-bottom: 1px solid var(--rule);
+}
+.stage h2 { margin: 0; font: 400 1.05rem/1.3 "Instrument Serif", ui-serif, Georgia, serif; }
+.stage .why {
+  margin: 0 0 0 auto;
+  font: 400 .64rem/1.4 "JetBrains Mono", ui-monospace, monospace;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage .shut {
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  font: 400 1.05rem/1 "JetBrains Mono", ui-monospace, monospace;
+  padding: 0 .1rem;
+}
+.stage .shut:hover { color: var(--ink); }
+.stage iframe { flex: 1; width: 100%; border: 0; background: var(--void); }
+body[data-screen] #core { opacity: .16; }
+
+/* A screen exists but he put the stage away: one word in the strip brings it back. */
+.chip {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: 500 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.chip[hidden] { display: none; }
+
+/* What his hands did on the stage, in the transcript where it happened. */
+.ask.fromscreen::before { content: "screen › "; color: var(--gold); opacity: .8; }
+/* And the moment she put something up. */
+.put {
+  margin: 1.1rem 0;
+  font: 500 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
 .opening { max-width: 30rem; }
 .opening h2 { margin: 0 0 .7rem; font: 400 clamp(1.9rem, 3.4vw, 2.6rem)/1.14 "Instrument Serif", ui-serif, Georgia, serif; }
 .opening h2 em { font-style: italic; color: var(--cyan); }
@@ -205,6 +276,9 @@ body[data-state="listening"] .wordmark em { color: var(--gold); }
 .go:hover { color: var(--ink); }
 .hint { max-width: 44rem; margin: .55rem 0 0; font: 400 .62rem/1 "JetBrains Mono", ui-monospace, monospace; color: var(--faint); letter-spacing: .05em; }
 
+@media (max-width: 900px) {
+  .stage { width: calc(100vw - 2rem); top: 4.2rem; right: 1rem; }
+}
 @media (max-width: 760px) {
   #core { right: -30vmin; opacity: .5; width: min(70vh, 110vw); height: min(70vh, 110vw); }
   .meta { display: none; }
@@ -221,6 +295,7 @@ body[data-state="listening"] .wordmark em { color: var(--gold); }
 <header class="strip">
   <h1 class="wordmark">V<em>e</em>la</h1>
   <p class="mode" id="mode">connecting</p>
+  <button type="button" class="chip" id="chip" hidden title="Bring the screen back"></button>
   <p class="meta">
     <span>turns <b id="turns">0</b></span>
     <span>tools <b id="tools">0</b></span>
@@ -236,6 +311,15 @@ body[data-state="listening"] .wordmark em { color: var(--gold); }
     </div>
   </div>
 </div>
+
+<section class="stage" id="stage" hidden aria-label="Her screen">
+  <header>
+    <h2 id="stageTitle"></h2>
+    <p class="why" id="stageNote"></p>
+    <button type="button" class="shut" id="stageShut" title="Put it away">×</button>
+  </header>
+  <iframe id="stageFrame" sandbox="allow-scripts" title="What she is showing"></iframe>
+</section>
 
 <form class="compose" id="compose">
   <div class="dock">
@@ -265,6 +349,8 @@ const $ = (id) => document.getElementById(id);
 const log = $("log"), scroll = $("scroll"), opening = $("opening");
 const modeEl = $("mode"), buildEl = $("build"), turnsEl = $("turns"), toolsEl = $("tools");
 const form = $("compose"), text = $("text"), micKey = $("mic"), earKey = $("ear"), hintEl = $("hint");
+const stage = $("stage"), stageTitle = $("stageTitle"), stageNote = $("stageNote");
+const stageFrame = $("stageFrame"), stageShut = $("stageShut"), chip = $("chip");
 
 const A = window.anime || null;
 const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -602,6 +688,72 @@ function wrong(message) {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+   The stage
+
+   She writes a page and shows it; it lands here. The iframe's URL carries a
+   screen-scoped key, minted per show, that opens /screen/file and nothing
+   else — the master token never enters a page she wrote. Anything inside can
+   call parent.postMessage({ vela: "..." }, "*") and it reaches her as words.
+   ════════════════════════════════════════════════════════════════════════ */
+let screenUp = null;
+
+function stageOpen() {
+  stage.hidden = false;
+  chip.hidden = true;
+  document.body.dataset.screen = "on";
+  animate(stage, { opacity: [0, 1], translateX: [26, 0], duration: 520, ease: "outCubic" });
+}
+
+/* His gesture only. What she is showing stays shown, one word away. */
+function stageAway() {
+  stage.hidden = true;
+  delete document.body.dataset.screen;
+  chip.hidden = !screenUp;
+}
+
+function showScreen(meta, quiet) {
+  screenUp = meta || null;
+  if (!screenUp) {
+    stageFrame.removeAttribute("src");
+    stageAway();
+    return;
+  }
+  stageTitle.textContent = screenUp.title;
+  stageNote.textContent = screenUp.note || "";
+  chip.textContent = "screen · " + screenUp.title;
+  stageFrame.src = "/screen/file?s=" + encodeURIComponent(screenUp.s || "");
+  stageOpen();
+  if (!quiet) {
+    begun();
+    const p = document.createElement("p");
+    p.className = "put";
+    p.textContent = "on the screen · " + screenUp.title;
+    log.append(p);
+    enter(p, 4);
+    follow();
+  }
+}
+
+stageShut.addEventListener("click", () => stageAway());
+chip.addEventListener("click", () => stageOpen());
+
+/* What he does on her page comes back as words. Only from the stage's own
+   window, only a string, and never more than a sentence's worth. */
+addEventListener("message", (e) => {
+  if (!screenUp || !stageFrame.contentWindow || e.source !== stageFrame.contentWindow) return;
+  const said = e.data && typeof e.data.vela === "string" ? e.data.vela.trim().slice(0, 500) : "";
+  if (!said) return;
+  begun();
+  const p = document.createElement("p");
+  p.className = "ask fromscreen";
+  p.textContent = said;
+  log.append(p);
+  enter(p);
+  follow();
+  deliver("[He did this on the screen: " + said + "]");
+});
+
+/* ════════════════════════════════════════════════════════════════════════
    Her voice: the same Kokoro the terminal uses
    ════════════════════════════════════════════════════════════════════════ */
 let speaking = false, canSpeak = false, speakingNow = false;
@@ -881,21 +1033,21 @@ function listen() {
     else if (ev.type === "delta") delta(ev.text || "");
     else if (ev.type === "result") done(ev.ms, ev.text);
     else if (ev.type === "say") unprompted(ev.text || "");
+    else if (ev.type === "show") showScreen(ev.screen);
     else if (ev.type === "error") { wrong(ev.message || "Something went wrong."); open = null; setState("idle", "listening"); }
   };
   // It reconnects itself. Say so, because silence is also what working looks like.
   events.onerror = () => setState("lost", "reconnecting");
 }
 
-async function say(said) {
-  yours(said);
-  const interrupted = cutOff;
-  cutOff = false;
+/* Hand her a turn. The transcript entry is the caller's business, because a
+   typed line and a click on the stage read differently on the page. */
+async function deliver(said, interrupted) {
   try {
     const res = await fetch("/turn", {
       method: "POST",
       headers: Object.assign({ "content-type": "application/json" }, auth),
-      body: JSON.stringify({ text: said, cutOff: interrupted }),
+      body: JSON.stringify({ text: said, cutOff: Boolean(interrupted) }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -905,6 +1057,13 @@ async function say(said) {
     wrong("Could not reach her. The service may have stopped.");
     setState("lost", "offline");
   }
+}
+
+async function say(said) {
+  yours(said);
+  const interrupted = cutOff;
+  cutOff = false;
+  return deliver(said, interrupted);
 }
 
 const grow = () => { text.style.height = "auto"; text.style.height = Math.min(text.scrollHeight, innerHeight * 0.28) + "px"; };
@@ -932,6 +1091,13 @@ fetch("/health", { headers: auth })
     micKey.hidden = !canHear;
     earKey.hidden = !canSpeak;
   })
+  .catch(() => {});
+
+/* Whatever she had up survives a reload. Quiet, because the stage opening
+   again is not news. */
+fetch("/screen", { headers: auth })
+  .then((r) => r.json())
+  .then(({ screen }) => { if (screen) showScreen(screen, true); })
   .catch(() => {});
 
 /* She comes up rather than appearing. One sequence, once, on load. */

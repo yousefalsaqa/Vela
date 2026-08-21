@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../src/server.js";
 import { connect, reachable, parseFrames } from "../src/client.js";
 import type { CoreEvent } from "../src/core.js";
+import { present, clear as clearScreen, type Screen } from "../src/screen.js";
 
 /** A core that records what it was told and emits whatever the test wants. */
 function fakeCore() {
@@ -172,6 +173,13 @@ describe("the local server", () => {
       client.stop();
     });
 
+    test("connect refuses a wrong token, rather than attaching to a stream it cannot open", async () => {
+      await assert.rejects(
+        () => connect({ port: running.endpoint.port, token: "wrong", pid: 0 }),
+        /could not open the event stream \(401\)/,
+      );
+    });
+
     test("two clients both see everything", async () => {
       const a = await connect(running.endpoint);
       const b = await connect(running.endpoint);
@@ -201,6 +209,12 @@ describe("the local server", () => {
 
     test("an empty turn is rejected rather than sent", async () => {
       const res = await call("/turn", { method: "POST", body: JSON.stringify({ text: "  " }) });
+      assert.equal(res.status, 400);
+      assert.deepEqual(fake.sent, []);
+    });
+
+    test("a turn with no text key at all is rejected the same way", async () => {
+      const res = await call("/turn", { method: "POST", body: JSON.stringify({}) });
       assert.equal(res.status, 400);
       assert.deepEqual(fake.sent, []);
     });
@@ -373,6 +387,32 @@ describe("ears and a voice", () => {
     assert.equal(res.status, 400);
   });
 
+  test("a /speak body that is not JSON is refused, not crashed on", async () => {
+    await up({ render: async () => Buffer.from("wav") });
+    const res = await fetch(at(`/speak?k=${running.endpoint.token}`), {
+      method: "POST",
+      body: "not json",
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test("a /speak body with no text key is refused the same way", async () => {
+    await up({ render: async () => Buffer.from("wav") });
+    const res = await fetch(at(`/speak?k=${running.endpoint.token}`), {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test("carries the name it was given, for a renamed assistant's hub", async () => {
+    await up({ name: "Jarvis" });
+    const health = (await (
+      await fetch(at(`/health?k=${running.endpoint.token}`))
+    ).json()) as { name: string };
+    assert.equal(health.name, "Jarvis");
+  });
+
   test("a render that comes back empty is reported, not played as silence", async () => {
     await up({ render: async () => null });
     const res = await fetch(at(`/speak?k=${running.endpoint.token}`), {
@@ -380,6 +420,20 @@ describe("ears and a voice", () => {
       body: JSON.stringify({ text: "anything" }),
     });
     assert.equal(res.status, 500);
+  });
+
+  test("a render of zero bytes is the same failure as no render at all", async () => {
+    await up({ render: async () => Buffer.alloc(0) });
+    const res = await fetch(at(`/speak?k=${running.endpoint.token}`), {
+      method: "POST",
+      body: JSON.stringify({ text: "anything" }),
+    });
+    assert.equal(res.status, 500);
+  });
+
+  test("an explicit port of zero still means an ephemeral port", async () => {
+    await up({ port: 0 });
+    assert.ok(running.endpoint.port > 0);
   });
 });
 
@@ -432,4 +486,200 @@ describe("being talked over", () => {
     assert.match(await res.text(), /Anime\.js/);
   });
 
+  test("anime.js needs no token, because a sandboxed screen page cannot present one", async () => {
+    const res = await fetch(`http://127.0.0.1:${running.endpoint.port}/anime.js`);
+    assert.equal(res.status, 200);
+  });
+});
+
+describe("the screen, served", () => {
+  let dir: string;
+  let running: RunningServer;
+  let fake: ReturnType<typeof fakeCore>;
+  let shown: Screen | null;
+
+  const at = (p: string) => `http://127.0.0.1:${running.endpoint.port}${p}`;
+  const master = () =>
+    ({ headers: { authorization: `Bearer ${running.endpoint.token}` } }) as RequestInit;
+
+  /** What the hub does on load: ask what is up, and get the scoped token with it. */
+  const meta = async () =>
+    (await (await fetch(at("/screen"), master())).json()) as {
+      screen: { id: string; title: string; note?: string; shownAt: number; s: string } | null;
+    };
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "vela-screen-srv-"));
+    fake = fakeCore();
+    shown = null;
+    running = await serve({
+      core: fake.core,
+      endpointFile: join(dir, "server.json"),
+      screen: () => shown,
+    });
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const put = (name: string, body = "<p>engine</p>") => {
+    const path = join(dir, name);
+    writeFileSync(path, body, "utf8");
+    shown = { id: "ab12cd34", title: "The engine", path, shownAt: 7, note: "stations 2 to 5" };
+  };
+
+  test("/screen is null when nothing is up", async () => {
+    assert.deepEqual(await meta(), { screen: null });
+  });
+
+  test("/screen carries id, title, note and a scoped token — never the path", async () => {
+    put("engine.html");
+    const { screen } = await meta();
+    assert.equal(screen?.id, "ab12cd34");
+    assert.equal(screen?.title, "The engine");
+    assert.equal(screen?.note, "stations 2 to 5");
+    assert.ok((screen?.s ?? "").length >= 32, "the scoped token must not be guessable");
+    assert.equal("path" in (screen ?? {}), false, "his filesystem layout stays on his machine");
+  });
+
+  test("a screen with no note has no note key, rather than a null one", async () => {
+    const path = join(dir, "plain.html");
+    writeFileSync(path, "<p>x</p>", "utf8");
+    shown = { id: "0011aabb", title: "Plain", path, shownAt: 3 };
+    const { screen } = await meta();
+    assert.equal("note" in (screen ?? {}), false);
+  });
+
+  test("a file outside the known types still serves, as plain bytes", async () => {
+    // The tool refuses these before they get here, but the server takes its
+    // injected state at face value rather than crashing on it.
+    const path = join(dir, "raw.bin");
+    writeFileSync(path, "bytes", "utf8");
+    shown = { id: "0011aabb", title: "Raw", path, shownAt: 4 };
+    const { screen } = await meta();
+    const res = await fetch(at(`/screen/file?s=${screen!.s}`));
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "application/octet-stream");
+  });
+
+  test("/screen itself stays behind the master token", async () => {
+    put("engine.html");
+    assert.equal((await fetch(at("/screen"))).status, 401);
+  });
+
+  test("/screen/file with no credentials at all is a locked door", async () => {
+    put("engine.html");
+    await meta(); // a key exists; the request just doesn't hold it
+    assert.equal((await fetch(at("/screen/file"))).status, 401);
+  });
+
+  test("the scoped token fetches the file, with its type and no caching", async () => {
+    put("engine.html");
+    const { screen } = await meta();
+    const res = await fetch(at(`/screen/file?s=${screen!.s}`));
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /text\/html/);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(await res.text(), "<p>engine</p>");
+  });
+
+  test("the served page is walled in by CSP, so a hostile screen cannot phone out", async () => {
+    put("engine.html");
+    const { screen } = await meta();
+    const csp =
+      (await fetch(at(`/screen/file?s=${screen!.s}`))).headers.get(
+        "content-security-policy",
+      ) ?? "";
+    assert.match(csp, /connect-src 'none'/, "fetch and XHR are the exfiltration channel");
+    assert.match(csp, /form-action 'none'/);
+    assert.match(csp, /script-src 'self' 'unsafe-inline'/, "'self' is what lets /anime.js load");
+  });
+
+  test("the scoped token opens nothing else — that is the entire point of it", async () => {
+    put("engine.html");
+    const { screen } = await meta();
+    const s = screen!.s;
+    assert.equal((await fetch(at(`/health?s=${s}`))).status, 401);
+    assert.equal((await fetch(at(`/events?s=${s}`))).status, 401);
+    const turn = await fetch(at(`/turn?s=${s}`), {
+      method: "POST",
+      body: JSON.stringify({ text: "injected" }),
+    });
+    assert.equal(turn.status, 401);
+    assert.deepEqual(fake.sent, [], "a screen page must never be able to talk as him");
+  });
+
+  test("a new show rotates the token, so a stale page loses even its one door", async () => {
+    put("engine.html");
+    const old = (await meta()).screen!.s;
+    fake.emit({ type: "show", screen: { id: "ef56ab78", title: "Again", shownAt: 8 } });
+    const fresh = (await meta()).screen!.s;
+    assert.notEqual(fresh, old);
+    assert.equal((await fetch(at(`/screen/file?s=${old}`))).status, 401);
+    assert.equal((await fetch(at(`/screen/file?s=${fresh}`))).status, 200);
+  });
+
+  test("a show frame reaches SSE clients with the scoped token attached", async () => {
+    put("engine.html");
+    const client = await connect(running.endpoint);
+    const seen: (CoreEvent & { screen?: { s?: string } })[] = [];
+    client.subscribe((e) => seen.push(e as (typeof seen)[number]));
+    await until(() => fake.listenerCount() > 0, "the server to subscribe");
+    fake.emit({ type: "show", screen: { id: "ab12cd34", title: "The engine", shownAt: 9 } });
+    await until(() => seen.length === 1, "the show frame");
+    const s = seen[0].screen?.s ?? "";
+    assert.ok(s.length >= 32, "the hub builds the iframe URL from this");
+    assert.equal((await fetch(at(`/screen/file?s=${s}`))).status, 200);
+    client.stop();
+  });
+
+  test("clearing rotates the token away entirely", async () => {
+    put("engine.html");
+    const s = (await meta()).screen!.s;
+    fake.emit({ type: "show", screen: null });
+    shown = null;
+    assert.equal((await fetch(at(`/screen/file?s=${s}`))).status, 401);
+  });
+
+  test("the master token still reads the file, for debugging with curl", async () => {
+    put("engine.html");
+    const res = await fetch(at("/screen/file"), master());
+    assert.equal(res.status, 200);
+  });
+
+  test("no screen up is a 404 even for the master token", async () => {
+    assert.equal((await fetch(at("/screen/file"), master())).status, 404);
+  });
+
+  test("a file deleted after being shown is a 404, not a crash", async () => {
+    put("gone.html");
+    const { screen } = await meta();
+    rmSync(shown!.path);
+    assert.equal((await fetch(at(`/screen/file?s=${screen!.s}`))).status, 404);
+  });
+
+  test("with nothing injected it reads the real screen module, which is what production does", async () => {
+    const other = mkdtempSync(join(tmpdir(), "vela-screen-real-"));
+    const real = await serve({ core: fakeCore().core, endpointFile: join(other, "server.json") });
+    try {
+      const path = join(other, "real.html");
+      writeFileSync(path, "<p>real</p>", "utf8");
+      present({ title: "Real", path });
+      const res = await fetch(`http://127.0.0.1:${real.endpoint.port}/screen`, {
+        headers: { authorization: `Bearer ${real.endpoint.token}` },
+      });
+      const { screen } = (await res.json()) as { screen: { title: string; s: string } | null };
+      assert.equal(screen?.title, "Real");
+      const file = await fetch(
+        `http://127.0.0.1:${real.endpoint.port}/screen/file?s=${screen!.s}`,
+      );
+      assert.equal(await file.text(), "<p>real</p>");
+    } finally {
+      clearScreen();
+      await real.close();
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
 });

@@ -262,7 +262,9 @@ honours `prefers-reduced-motion`.
 | `POST /turn` | say something to her |
 | `POST /hear` | a browser recording in, words out |
 | `POST /speak` | a sentence in, a wav out |
-| `GET /anime.js` | the vendored motion library |
+| `GET /screen` | what she is showing: title, note, and the screen's own key |
+| `GET /screen/file` | the shown file itself — the one route that key opens |
+| `GET /anime.js` | the vendored motion library; the one unauthenticated route |
 
 **The voice buttons are her voice, not the browser's.** `POST /speak` runs the
 same Kokoro worker the terminal uses and returns the wav; `POST /hear` runs the
@@ -279,6 +281,53 @@ The server prefixes that turn with a note saying she was interrupted and that
 the last reply was longer than it needed to be. Feedback she never hears is
 feedback wasted, and the fix she needs is a shorter next answer rather than an
 apology for the last one. Typing over her does the same thing.
+
+## The screen
+
+```
+you › walk me through why the HPT blades fail
+Vela › Creep, mostly. Look at the screen.
+        · on screen: The high-pressure turbine
+```
+
+The stage: a panel in the hub that Vela can put a page on. She writes a
+self-contained HTML file (usually under `data/screen/`), calls the
+`show_screen` tool with a path and a title, and it appears beside the
+conversation — a schematic, a chart, a table, anything a paragraph tells
+badly. `clear_screen` takes it down; a new show replaces the old one. Each
+showing gets its own id, which is what "go back to the engine" will resolve
+against when screen history exists.
+
+**Clicks come back as words.** A page can call
+`parent.postMessage({ vela: "he clicked sensor 9, HPC outlet temperature" }, "*")`
+and that sentence arrives as a turn, prefixed so she knows it came from the
+screen rather than the keyboard. That is the whole interaction contract: her
+pages don't get an API, they get her ear. The hub caps the payload at a
+sentence's worth and only accepts it from the stage's own window.
+
+**The page never holds the master token.** A sandboxed iframe can still read
+its own URL, and she writes these pages with scripting on — some of them from
+things she read on the internet. So the iframe's URL carries a *screen key*
+instead: minted by the server, rotated on every show, and accepted by exactly
+one route, `GET /screen/file`, which serves only the file currently up. It
+cannot post a turn, open the event stream, or reach anything else. Underneath
+that, the file is served with a CSP that closes `connect-src`, forms and
+external scripts, so even a hostile page has nowhere to send whatever it
+knows — which is only itself. The hub learns the key over the master-authed
+channels (`/events` and `GET /screen`), where the browser page — his, not
+hers — already holds the master token.
+
+`GET /anime.js` became the one unauthenticated route for the same reason: a
+sandboxed page has no token to offer, and a public copy of a public library
+guards nothing. Everything else her pages might reference has to be inlined,
+which is the point rather than a limitation — one file, no build step, same
+as the hub itself.
+
+A screen survives a hub reload (`GET /screen` restores it) but not a service
+restart: it is conversational ephemera, cleared the same way the session is.
+The × on the stage only puts it away locally — a chip in the strip brings it
+back — because him tidying his window is not the same act as her striking
+the set.
 
 ## Pauses
 
@@ -645,8 +694,9 @@ rather than depending on the model remembering to call `resolve_watch`.
 ## Next
 
 1. Voice — wake word (openWakeWord ships a pretrained `hey_jarvis`; a custom
-   "Vela" model trains on synthetic TTS audio), streaming STT/TTS. Needs the
-   core split into a local server with the REPL as one client.
+   "Vela" model trains on synthetic TTS audio, which Kokoro can generate),
+   streaming STT/TTS. The core split it needed shipped in 1.1.0; what's left
+   is the worker, the VAD endpointing, and thresholds tuned on a live mic.
 2. Fabrication — CAD-as-code (`build123d`), slicer CLI, printer REST APIs, each
    as its own tool module.
 3. More trigger kinds — a window title appearing, an HTTP endpoint changing
@@ -671,3 +721,4 @@ nothing read it, so if you add to this list, bump it.
 | 1.4.0 | Skills discovered rather than listed, so she can be handed new hands without a code change. Thirty-four of them, and a voice spec that now says how to recover from a slip. |
 | 1.4.1 | Speaking and listening on by default, because remembering a variable to be spoken to was the surprise, not the speech. The first and last sentence of every reply now get checked before it goes out, which is where she was still giving herself away. |
 | 1.5.0 | A second face: a hub in the browser, with her own voice and her own ears behind it rather than the browser's. |
+| 1.6.0 | A screen. She writes a page — a schematic, a chart, a clickable diagram — and puts it on the hub's stage, and what he does on it comes back to her as words. The page gets a key that opens one route and a CSP that closes the rest. |

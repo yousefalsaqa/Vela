@@ -1,9 +1,10 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { velaToolDefs } from "../src/tools.js";
+import { current } from "../src/screen.js";
 
 // The tool handlers go through the default store, so point it at a throwaway
 // database and a throwaway vault before any of them run. Without the vault,
@@ -35,6 +36,7 @@ describe("tool surface", () => {
       [
         "add_project",
         "browser_history",
+        "clear_screen",
         "forget",
         "launch_app",
         "list_projects",
@@ -44,6 +46,7 @@ describe("tool surface", () => {
         "recall",
         "remember",
         "resolve_watch",
+        "show_screen",
         "watch",
       ],
       "a tool renamed here is a capability the model silently loses",
@@ -115,6 +118,35 @@ describe("project tools", () => {
       .split("\n")
       .find((l) => l.startsWith("vela"));
     assert.equal(line, "vela → C:/Users/Yousef/Desktop/Vela");
+  });
+});
+
+describe("screen tools", () => {
+  const page = (name: string) => {
+    const path = join(vault, name); // the temp dir from before() doubles as scratch space
+    writeFileSync(path, "<p>hi</p>", "utf8");
+    return path;
+  };
+
+  test("show_screen puts an existing page up and says so", async () => {
+    const path = page("engine.html");
+    assert.equal(
+      await call("show_screen", { title: "HPC cross-section", path }),
+      "On the screen: HPC cross-section.",
+    );
+    assert.equal(current()?.path, path);
+    assert.equal(current()?.title, "HPC cross-section");
+  });
+
+  test("show_screen refuses a file that was never written, so she writes it first", async () => {
+    const missing = join(vault, "unwritten.html");
+    assert.match(await call("show_screen", { title: "Ghost", path: missing }), /Write the file first/);
+  });
+
+  test("clear_screen takes it down", async () => {
+    await call("show_screen", { title: "Up", path: page("up.html") });
+    assert.equal(await call("clear_screen"), "Cleared the screen.");
+    assert.equal(current(), null);
   });
 });
 

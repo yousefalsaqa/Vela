@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { velaTools } from "./tools.js";
+import { onScreen, type ScreenMeta } from "./screen.js";
 import { store as defaultStore, type Store } from "./memory.js";
 import { startHeartbeat, type Heartbeat } from "./ambient.js";
 import { startTriggers } from "./triggers.js";
@@ -24,6 +25,8 @@ export type CoreEvent =
   | { type: "result"; ms: number; text?: string }
   /** Something unprompted — a watch fired. */
   | { type: "say"; text: string }
+  /** She put something on the screen (or took it down: null). */
+  | { type: "show"; screen: ScreenMeta | null }
   | { type: "error"; message: string };
 
 export type Listener = (event: CoreEvent) => void;
@@ -168,6 +171,10 @@ export function createCore(opts: CoreOptions): Core {
     ? watch({ store, onFire: (ids) => heartbeat.check(ids) })
     : () => {};
 
+  // The show_screen tool talks to the screen module; faces hear about it
+  // through the same stream everything else arrives on.
+  const offScreen = onScreen((screen) => emit({ type: "show", screen }));
+
   return {
     send(text: string) {
       if (stopped) return;
@@ -185,6 +192,7 @@ export function createCore(opts: CoreOptions): Core {
 
     stop() {
       stopped = true;
+      offScreen();
       stopTriggers();
       heartbeat?.stop();
       turns.end();

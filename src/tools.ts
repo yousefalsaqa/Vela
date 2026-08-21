@@ -13,6 +13,7 @@ import {
 } from "./memory.js";
 import { launchApp, mediaKey, listRunningApps } from "./desktop.js";
 import { searchHistory, ago } from "./history.js";
+import { present, clear } from "./screen.js";
 
 const text = (body: string) => ({
   content: [{ type: "text" as const, text: body }],
@@ -142,6 +143,42 @@ export const velaToolDefs = [
         "seeing what Yousef is working on right now.",
       {},
       async () => text(await listRunningApps()),
+    ),
+
+    tool(
+      "show_screen",
+      "Put a page on your screen — the stage panel in the hub. Use it when a " +
+        "diagram, schematic, chart or table says it better than a paragraph, " +
+        "or when Yousef asks to see something. Write a self-contained HTML " +
+        "file first (conventionally under data/screen/): inline all CSS, JS " +
+        "and SVG, images as data: URIs — the page runs sandboxed and its " +
+        "requests carry no credentials, so anything external fails to load. " +
+        "The one exception is <script src=\"/anime.js\"></script>, served for " +
+        "motion. Match the hub: background #05090d, cyan #4fd1db, gold " +
+        "#f5b95f. To make it interactive, have elements call " +
+        "parent.postMessage({ vela: 'what he did, in words' }, '*') — that " +
+        "reaches you as a turn, so phrase it as words you want in your ear " +
+        "('he clicked sensor 9, HPC outlet temperature'), not as data. An " +
+        ".svg, image or .pdf that already exists can go up directly. With " +
+        "something on the screen, keep the spoken reply short; the screen " +
+        "carries the detail.",
+      {
+        path: z.string().describe("Absolute path to the file to show."),
+        title: z.string().describe("Short title shown above the stage, e.g. 'The 21 sensors'."),
+        note: z
+          .string()
+          .optional()
+          .describe("One-line caption for what he's looking at, if the title needs help."),
+      },
+      async (args) => text(present({ title: args.title, path: args.path, note: args.note })),
+    ),
+
+    tool(
+      "clear_screen",
+      "Take the current page off your screen. Use when he asks for it to go, " +
+        "or when what's showing stopped being relevant to the conversation.",
+      {},
+      async () => text(clear()),
     ),
 
     tool(
