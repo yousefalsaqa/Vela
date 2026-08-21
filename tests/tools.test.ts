@@ -36,6 +36,7 @@ describe("tool surface", () => {
       [
         "add_project",
         "browser_history",
+        "capture_screen",
         "clear_screen",
         "forget",
         "launch_app",

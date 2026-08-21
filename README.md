@@ -33,6 +33,8 @@ Added here (`src/tools.ts`):
 | `launch_app` | Open apps, URLs, files — knows aliases like `netflix` |
 | `media_control` | Play/pause, skip, volume |
 | `list_windows` | See what's currently open |
+| `capture_screen` | Look at what's actually on his monitors |
+| `show_screen` / `clear_screen` | Put a page on her own screen in the hub |
 | `watch` / `list_watches` / `resolve_watch` | Keep an eye on something and speak up when it changes |
 
 ## Memory is an Obsidian vault
@@ -228,6 +230,44 @@ Her second face, at `/` on the same service the REPL attaches to. Same session,
 not a second one: type in the terminal and it appears in the browser, because
 both are clients of one core.
 
+**It is a room rather than a page.** There are no sections, no cards, no
+sidebar and no counters printed across the top because the values happen to
+exist. The viewport is her field; the parts appear in it when they have
+something to carry. Her presence is the ground the text stands on, and it
+changes posture rather than being a widget in a corner: she has the room when
+nothing is happening, tightens while she works, and steps in behind the words
+when she puts something on the stage. Conversation is one of the things that
+happens in the room, not the reason it exists — the newest exchange is at full
+weight, everything before it recedes, and an empty room stays empty rather
+than filling with prose about itself.
+
+**She holds still when she is idle, and means it.** The canvas loop stops
+rather than repainting a still image sixty times a second: motion that carries
+nothing is worse than nothing on a machine she now runs on all day. It starts
+again the moment there is amplitude, a tool call, or a change of posture.
+
+Two typefaces, doing two jobs. Serif is her; mono is the instrument she lives
+inside — his typing, tool names, state, times. Cyan is her working, gold is her
+speaking, and pale is him; their scarcity is what makes them mean anything.
+
+The work she did in a turn folds into one line of English — "read two files and
+ran a command · 4.2s" — that opens on click. Only the last seven steps are
+built; anything older is one more click away and is not put in the page until
+he asks, because thirty nodes under every exchange is a cost nobody reads the
+bottom of.
+
+**Her markdown is taken out twice, differently.** Set in the display serif,
+`**like this**` reads as broken; handed to Kokoro, it is read aloud as
+asterisks. So the page strips the markers for the eye and keeps what they
+wrapped, and cleans separately for the ear the way `speakable()` does in
+[voice.ts](src/voice.ts) — code fences become "code block", a Windows path
+becomes its filename. A marker whose other half hasn't streamed in yet is held
+back rather than drawn, so nothing flickers between literal and formatted.
+
+On a phone it is not the desk folded up. Her state, the one thing that matters
+now, and a way to answer; what she is showing takes the whole screen; and the
+conversation is pulled up when he wants it rather than being the default view.
+
 [hub.html](src/hub.html) is one file with no build step. The only thing it
 fetches from outside is the fonts.
 
@@ -292,6 +332,40 @@ The server prefixes that turn with a note saying she was interrupted and that
 the last reply was longer than it needed to be. Feedback she never hears is
 feedback wasted, and the fix she needs is a shorter next answer rather than an
 apology for the last one. Typing over her does the same thing.
+
+## Eyes
+
+```
+you › why does this look wrong
+        · capture_screen the layout he says looks wrong
+Vela › The right column is under the fold at that width.
+```
+
+`capture_screen` takes a picture of a monitor or a single window and hands it
+back as an image. It exists for the questions whose answer is on screen and
+can't be retyped: a schematic, a CAD viewport, an error dialog, a chart that
+looks off. Pass part of a window title from `list_windows` to grab one app, or
+a 1-based monitor number for a whole screen.
+
+**It is pull-only, and that is the whole safety model.** It reads whatever
+happens to be up, which will sometimes be his mail or a password manager, so
+it is never on the heartbeat, never reachable from a watch, and only ever
+happens because he asked in that turn. Every capture also lands as a PNG under
+`data/screen/`, so there is a record on disk of exactly what was seen rather
+than it being invisible.
+
+The cost of this feature is pixels, so the picture is scaled on the way out:
+800px on the long edge by default, 1568 with `detail`, and never upscaled. At
+800 a schematic's labels are gone but "which app is that" survives, which is
+most of what gets asked. Above 1568 an image stops buying readable detail and
+only costs more.
+
+Failures are sentences rather than throws, because the reader is the model and
+the message is the fix: a window that isn't open names itself and points at
+`list_windows`, a minimised one says it's minimised. A monitor number he
+doesn't have falls back to the primary instead of refusing, on the grounds
+that he miscounted and a picture of the wrong screen is answerable in one line
+where an error is a wasted round trip.
 
 ## The screen
 
@@ -628,6 +702,26 @@ and deterministic.
 VELA_LIVE=1 npm run test:live
 ```
 
+The hub is a face and has no unit tests, for the same reason `index.ts`
+doesn't. What it has instead is a pair of browser checks that drive the real
+page against the real server, with a scripted core in place of the model, so
+every state they put it in is one the core can actually produce:
+
+```bash
+npm run check:room                                  # in one terminal
+uv run --with playwright python scripts/room-check.py       # then these
+uv run --with playwright python scripts/room-idle-check.py
+```
+
+Between them they cover the states a screenshot can't: working with the tool
+in the rail, the fold opening, one exchange at full weight, a line she started
+herself, the stage taking the room and giving it back, a click inside her page
+arriving as a turn, the screen key never being the master token, markdown
+gone from both the page and her mouth, and the phone laying out as a phone
+rather than a squeezed desk. They wait on conditions rather than clocks —
+a fixed sleep passes on a fast machine and fails on a busy one, which is how a
+suite learns to be ignored.
+
 That one does call the model (~12s, real tokens). It exists because nothing
 else checks the thing most likely to drift: whether the model actually honours
 the `SILENT` / `#id done:` reply contract that `parseReply` is built around.
@@ -793,3 +887,4 @@ you add to this list, bump it.
 | 1.6.0 | A screen. She writes a page — a schematic, a chart, a clickable diagram — and puts it on the hub's stage, and what he does on it comes back to her as words. The page gets a key that opens one route and a CSP that closes the rest. |
 | 2.0.0 | Always on. She starts with Windows, hidden, at one address worth pinning, and idles at 430MB instead of 1.5GB because the speech models wait until they are wanted. The major number is the point: she stopped being something he starts. Booting her from a clean environment is also what found the effort bug that would have made every turn a 400. |
 | 2.0.1 | The pinned tab actually survives being reloaded. A fixed address and a page that threw its key away were two halves of this release contradicting each other. |
+| 3.0.0 | A room instead of a page, and eyes. The hub stopped being a chat window with her bolted to the side: her presence is the ground, the stage takes the floor when she has something to show, and on a phone she is a different body rather than a squeezed desk. `capture_screen` lets her look at what is actually on his monitors. Her markdown stopped being read out loud. |

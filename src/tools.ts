@@ -11,12 +11,27 @@ import {
   resolveWatch,
   type MemoryKind,
 } from "./memory.js";
-import { launchApp, mediaKey, listRunningApps } from "./desktop.js";
+import { launchApp, mediaKey, listRunningApps, captureScreen } from "./desktop.js";
 import { searchHistory, ago } from "./history.js";
 import { present, clear } from "./screen.js";
+import { captureFile } from "./paths.js";
+import { readFileSync } from "node:fs";
 
 const text = (body: string) => ({
   content: [{ type: "text" as const, text: body }],
+});
+
+/**
+ * An image plus a line saying what it is. Every other tool here answers in
+ * text; this is the one that answers in pixels, and the caption matters
+ * because a bare image gives the model no idea which monitor it got.
+ */
+const image = (data: string, caption: string) => ({
+  content: [
+    // MCP's own shape: flat data + mimeType, not the API's nested source block.
+    { type: "image" as const, data, mimeType: "image/png" },
+    { type: "text" as const, text: caption },
+  ],
 });
 
 /**
@@ -143,6 +158,53 @@ export const velaToolDefs = [
         "seeing what Yousef is working on right now.",
       {},
       async () => text(await listRunningApps()),
+    ),
+
+    tool(
+      "capture_screen",
+      "Look at what's on Yousef's monitors right now. Use it when the answer " +
+        "is in something he can see and can't easily retype: a schematic, a " +
+        "CAD viewport, an error dialog, a chart, a layout that looks wrong. " +
+        "Pass `window` with part of a title from list_windows to grab just " +
+        "that app, or `monitor` (1 = primary) for a whole screen. Prefer " +
+        "list_windows when you only need to know what's open or what's " +
+        "playing — a title is cheaper and more reliable than reading pixels, " +
+        "so 'pause that song' needs no capture. Set detail only when small " +
+        "text has to be legible; it costs about twice as much. Only ever use " +
+        "this because he asked in this turn: never on a heartbeat, never to " +
+        "check up on him.",
+      {
+        window: z
+          .string()
+          .optional()
+          .describe("Part of a window title, e.g. 'Fusion' or 'Chrome'. Omit for a whole monitor."),
+        monitor: z
+          .number()
+          .optional()
+          .describe("Which monitor, 1-based. 1 is primary. Ignored when window is given."),
+        detail: z
+          .enum(["normal", "detail"])
+          .optional()
+          .describe("'detail' for legible small text (~2x the cost). Default 'normal'."),
+        reason: z
+          .string()
+          .describe("What you're looking for, e.g. 'the schematic he's asking about'. Names the file."),
+      },
+      async (args) => {
+        const path = captureFile(args.reason);
+        const shot = await captureScreen({
+          path,
+          window: args.window,
+          monitor: args.monitor,
+          detail: args.detail,
+        });
+        if (!shot.ok) return text(shot.reason);
+        const what = args.window ? `window matching "${args.window}"` : `monitor ${args.monitor ?? 1}`;
+        return image(
+          readFileSync(shot.path).toString("base64"),
+          `${what}, ${shot.size}. Saved to ${shot.path}.`,
+        );
+      },
     ),
 
     tool(

@@ -1,6 +1,6 @@
 {
   "name": "vela",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "Personal assistant with hands — Claude Agent SDK, durable memory, desktop control",
   "main": "index.js",
   "scripts": {
@@ -9,6 +9,7 @@
     "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-exclude=\"tests/**\" --test-coverage-exclude=\"src/index.ts\" --test-coverage-exclude=\"src/proc.ts\" --test-coverage-lines=94 --test-coverage-functions=88 --test-coverage-branches=92 \"tests/*.test.ts\"",
     "test:live": "node --import tsx --test \"tests/live/*.test.ts\"",
     "check": "npm run typecheck && npm test",
+    "check:room": "tsx scripts/room-harness.ts",
     "dev": "tsx src/index.ts",
     "serve": "tsx src/serve.ts",
     "start": "tsx src/index.ts",

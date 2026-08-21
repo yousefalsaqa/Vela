@@ -115,3 +115,124 @@ export async function listRunningApps(exec: PsRunner = ps): Promise<string> {
   );
   return out || "No windowed applications running.";
 }
+
+/**
+ * Eyes. What is actually on his monitors right now.
+ *
+ * Deliberately pull-only. This reads whatever happens to be on screen, which
+ * will sometimes be a password manager or his mail, so it is never wired to
+ * the heartbeat and never reached for by a watch: it happens because he asked
+ * in this turn. Every capture also lands as a file under data/screen/, so
+ * there is a record on disk of exactly what was seen rather than it being
+ * invisible.
+ */
+
+/** The long edge, in pixels, that a capture is scaled down to before sending. */
+export const CAPTURE_SIZES = { normal: 800, detail: 1568 } as const;
+export type CaptureDetail = keyof typeof CAPTURE_SIZES;
+
+/**
+ * Build the PowerShell that grabs a bitmap and writes it as a PNG.
+ *
+ * Separate from the running of it so the interesting decisions — which
+ * monitor, which window, what it scales to — can be asserted on without a
+ * screen existing. `window` wins over `monitor` when both are given: naming a
+ * window is more specific than naming the glass it sits on.
+ *
+ * The scale-down happens here rather than after the fact because the whole
+ * cost of this feature is pixels: past about 1568 on the long edge an image
+ * stops buying any more readable detail and only costs more, and at the
+ * default 800 a schematic's labels are gone but "which app is that" survives.
+ */
+export function captureCommand(opts: {
+  path: string;
+  window?: string;
+  monitor?: number;
+  detail?: CaptureDetail;
+}): string {
+  const long = CAPTURE_SIZES[opts.detail ?? "normal"];
+  const target = opts.window
+    ? // Match the way list_windows presents things: he says part of a title
+      // he saw there, so a substring match is what he means. -like with a
+      // wildcard, on a quoted string, keeps the pattern inside the quotes.
+      `$w = Get-Process | Where-Object { $_.MainWindowTitle -like ${q(`*${opts.window}*`)} } | ` +
+      `Select-Object -First 1; ` +
+      `if (-not $w) { Write-Output 'no-window'; exit }; ` +
+      `$r = New-Object Vela.Win32+RECT; ` +
+      `[void][Vela.Win32]::GetWindowRect($w.MainWindowHandle, [ref]$r); ` +
+      `$x = $r.Left; $y = $r.Top; ` +
+      `$sw = $r.Right - $r.Left; $sh = $r.Bottom - $r.Top; `
+    : // Monitor index is 1-based for him, because "my second monitor" is not
+      // "monitor 1". Out of range falls back to primary rather than throwing:
+      // he miscounted, and a picture of the wrong screen beats an error.
+      `$screens = [System.Windows.Forms.Screen]::AllScreens; ` +
+      `$i = ${Math.trunc(opts.monitor ?? 1) - 1}; ` +
+      `if ($i -lt 0 -or $i -ge $screens.Count) { ` +
+      `$s = [System.Windows.Forms.Screen]::PrimaryScreen } else { $s = $screens[$i] }; ` +
+      `$x = $s.Bounds.X; $y = $s.Bounds.Y; ` +
+      `$sw = $s.Bounds.Width; $sh = $s.Bounds.Height; `;
+
+  return (
+    `Add-Type -AssemblyName System.Windows.Forms, System.Drawing; ` +
+    // GetWindowRect is only needed for the window case, but defining the type
+    // unconditionally keeps the two branches from having to agree on setup.
+    `if (-not ('Vela.Win32' -as [type])) { Add-Type -Namespace Vela -Name Win32 -MemberDefinition ` +
+    `'[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r); ` +
+    `public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }' }; ` +
+    target +
+    `if ($sw -le 0 -or $sh -le 0) { Write-Output 'no-pixels'; exit }; ` +
+    `$bmp = New-Object System.Drawing.Bitmap $sw, $sh; ` +
+    `$g = [System.Drawing.Graphics]::FromImage($bmp); ` +
+    `$g.CopyFromScreen($x, $y, 0, 0, $bmp.Size); ` +
+    // Scale on the way out. Ratio is capped at 1 so a small window is never
+    // blown up: upscaling costs tokens and adds nothing to read.
+    `$ratio = [Math]::Min(1.0, ${long} / [Math]::Max($sw, $sh)); ` +
+    `$out = New-Object System.Drawing.Bitmap ([int]($sw * $ratio)), ([int]($sh * $ratio)); ` +
+    `$g2 = [System.Drawing.Graphics]::FromImage($out); ` +
+    `$g2.InterpolationMode = 'HighQualityBicubic'; ` +
+    `$g2.DrawImage($bmp, 0, 0, $out.Width, $out.Height); ` +
+    `$out.Save(${q(opts.path)}, [System.Drawing.Imaging.ImageFormat]::Png); ` +
+    `$g.Dispose(); $g2.Dispose(); $bmp.Dispose(); $out.Dispose(); ` +
+    `Write-Output ('ok ' + $out.Width + 'x' + $out.Height)`
+  );
+}
+
+/** What a capture came back as: an image to send, or a sentence saying why not. */
+export type Capture =
+  | { ok: true; path: string; size: string }
+  | { ok: false; reason: string };
+
+/**
+ * Take the shot. Failures come back as sentences rather than throws, the same
+ * way screen.ts refuses, because the reader is the model and the message is
+ * the fix.
+ */
+export async function captureScreen(
+  opts: { path: string; window?: string; monitor?: number; detail?: CaptureDetail },
+  exec: PsRunner = ps,
+): Promise<Capture> {
+  let out: string;
+  try {
+    out = await exec(captureCommand(opts));
+  } catch (err) {
+    return { ok: false, reason: `Could not capture the screen: ${(err as Error).message}` };
+  }
+
+  if (out.startsWith("no-window")) {
+    return {
+      ok: false,
+      reason:
+        `No open window matches "${opts.window}". ` +
+        `Use list_windows to see the exact titles.`,
+    };
+  }
+  if (out.startsWith("no-pixels")) {
+    // A minimised window reports a zero or negative rect. Worth saying which,
+    // because "restore it and ask again" is the fix and nothing else is.
+    return { ok: false, reason: "That window is minimised, so there is nothing to capture." };
+  }
+  if (!out.startsWith("ok ")) {
+    return { ok: false, reason: `Could not capture the screen: ${out || "no output"}` };
+  }
+  return { ok: true, path: opts.path, size: out.slice(3).trim() };
+}

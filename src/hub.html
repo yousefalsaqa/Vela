@@ -2,338 +2,538 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Vela</title>
+<!--
+  Her mark, inline. Installed to the taskbar she needs an icon, and a file
+  would mean a request that carries no key and comes back 401 — an error in
+  his console every single load, for a picture. Two rings and an off-centre
+  point: the same shape the field draws, small enough to read at 16px.
+-->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305090d'/%3E%3Ccircle cx='16' cy='16' r='10.5' fill='none' stroke='%234fd1db' stroke-opacity='.32' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='%234fd1db' stroke-width='1.8'/%3E%3Ccircle cx='16' cy='16' r='1.7' fill='%23f5b95f'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#05090d">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 /*
-  Her replies are one or two sentences. That is in the persona, not an
-  accident, so a page built for paragraphs is mostly empty by construction.
-  This is built for what she actually says: the answer is set large because it
-  is short, and the work underneath it is the texture.
+  The room.
 
-  Three sizes carry the whole hierarchy. The live answer is display serif. The
-  moment a new one arrives it steps down to body size and dims, so the page
-  always has exactly one thing at full weight. Tool calls are a horizontal
-  band, not a list, because they are a sequence in time rather than an outline.
+  Not a page with sections: a space she is in. The whole viewport is her field,
+  and the parts appear in it when they have something to carry. Nothing here is
+  reserved for chat, because conversation is one of the things that happens in
+  a room rather than the reason the room exists.
 
-  The core is not a widget in a corner: it is the room the text sits in. That
-  is what the space on the right is for. Cyan is her working, gold is her
-  speaking, and they never appear together because they mean opposite things.
+  Two voices only. Serif is Vela; mono is the instrument she lives inside —
+  his typing, tool names, state, times. That contrast is the whole typographic
+  idea and there is no third face.
+
+  Colour is meaning, not decoration. Cyan is her working. Gold is her speaking.
+  Pale is him. They are scarce on purpose: three accents on a near-black field
+  say something, and the same three everywhere say nothing.
 */
 :root {
   --void: #05090d;
-  --ink: #eef5f8;
-  --dim: #7d97a4;
-  --faint: #455966;
-  --rule: rgba(140, 190, 215, .14);
+  --ink: #e9f2f6;
+  --dim: #7a929e;
+  --faint: #3f525d;
+  --hair: rgba(140, 190, 215, .10);
   --cyan: #4fd1db;
   --gold: #f5b95f;
   --wrong: #ff8172;
+
+  --serif: "Instrument Serif", ui-serif, Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --pad: clamp(1.1rem, 2.6vw, 2.4rem);
+  --rail: 2.6rem;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --ease: cubic-bezier(.2, .7, .3, 1);
 }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
+  min-height: 100dvh;
   background: var(--void);
   color: var(--ink);
-  font: 400 16px/1.6 "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
-  display: flex;
-  flex-direction: column;
+  font: 400 15px/1.55 var(--mono);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* ── the room ─────────────────────────────────────────────────────────── */
-#core {
-  position: fixed;
-  right: -12vmin;
-  top: 50%;
-  transform: translateY(-50%);
-  width: min(86vh, 62vw);
-  height: min(86vh, 62vw);
-  z-index: 0;
-  opacity: .78;
-  pointer-events: none;
-}
-.wash {
+/* Her presence is the ground everything else stands on, not a widget in a
+   corner. It is painted from real amplitude and real activity; see draw(). */
+#field {
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: radial-gradient(58% 58% at 76% 50%, rgba(79, 209, 219, .09), transparent 68%);
-  transition: background .9s ease;
 }
-body[data-state="speaking"] .wash,
-body[data-state="listening"] .wash { background: radial-gradient(58% 58% at 76% 50%, rgba(245, 185, 95, .11), transparent 68%); }
 
-/* ── the strip ────────────────────────────────────────────────────────── */
-.strip {
+.room {
   position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: baseline;
-  gap: 1.5rem;
-  padding: 1.5rem clamp(1.3rem, 5vw, 4rem) 0;
+  z-index: 1;
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: var(--rail) minmax(0, 1fr) auto;
+  grid-template-columns: 100%;
 }
-.wordmark { margin: 0; font: 400 1.85rem/1 "Instrument Serif", ui-serif, Georgia, serif; }
-.wordmark em { font-style: italic; color: var(--cyan); transition: color .6s ease; }
-body[data-state="speaking"] .wordmark em,
-body[data-state="listening"] .wordmark em { color: var(--gold); }
-.mode {
+
+/* ── the rail ─────────────────────────────────────────────────────────────
+   What she is doing, in as few words as it takes. Nothing lives here just
+   because the value exists: no turn counts, no pid, no uptime. */
+.rail {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  padding: 0 var(--pad);
+  min-width: 0;
+}
+.mark {
   margin: 0;
-  font: 500 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
-  letter-spacing: .3em;
+  font: 400 1.15rem/1 var(--serif);
+  letter-spacing: .01em;
+  flex: 0 0 auto;
+}
+.mark em { font-style: italic; color: var(--cyan); transition: color .7s var(--ease); }
+body[data-state="speaking"] .mark em { color: var(--gold); }
+body[data-state="lost"] .mark em { color: var(--faint); }
+
+.state {
+  font: 500 .62rem/1 var(--mono);
+  letter-spacing: .26em;
   text-transform: uppercase;
   color: var(--dim);
+  flex: 0 0 auto;
 }
-.meta {
-  margin: 0 0 0 auto;
-  display: flex;
-  gap: 1.6rem;
-  font: 400 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
-  letter-spacing: .06em;
+body[data-state="working"] .state { color: var(--cyan); }
+body[data-state="speaking"] .state { color: var(--gold); }
+body[data-state="lost"] .state { color: var(--wrong); }
+
+/* The tool she is in the middle of. One line, present tense, gone after. */
+.doing {
+  min-width: 0;
+  flex: 1 1 auto;
+  font: 400 .66rem/1 var(--mono);
   color: var(--faint);
-}
-.meta b { font-weight: 500; color: var(--dim); }
-
-/* ── the log ──────────────────────────────────────────────────────────── */
-.scroll { position: relative; z-index: 1; flex: 1; overflow-y: auto; padding: 2.4rem clamp(1.3rem, 5vw, 4rem) 1rem; }
-.log { max-width: 44rem; }
-
-.ask {
-  margin: 2.4rem 0 .9rem;
-  font: 400 .74rem/1.5 "JetBrains Mono", ui-monospace, monospace;
-  letter-spacing: .04em;
-  color: var(--dim);
-  overflow-wrap: anywhere;
-}
-.ask::before { content: "› "; color: var(--faint); }
-.log > .ask:first-child { margin-top: 0; }
-
-/* The work, as a band across the page rather than a bulleted list: these
-   happened one after another, and a rule reads as time passing. */
-.work {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .5rem .9rem;
-  margin: 0 0 1.1rem;
-  padding: .5rem 0;
-  border-top: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
-  list-style: none;
-  font: 400 .7rem/1.4 "JetBrains Mono", ui-monospace, monospace;
-  color: var(--faint);
-}
-.work li { display: flex; align-items: center; gap: .5rem; overflow-wrap: anywhere; }
-.work li + li::before { content: ""; width: 3px; height: 3px; border-radius: 50%; background: var(--cyan); opacity: .5; }
-.work[hidden] { display: none; }
-
-/* The answer. Large because it is short: a one-line reply set small looks
-   lost, and set large looks deliberate. */
-.answer {
-  margin: 0 0 .8rem;
-  font: 400 clamp(1.35rem, 2.4vw, 1.85rem)/1.35 "Instrument Serif", ui-serif, Georgia, serif;
-  letter-spacing: -.005em;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  transition: font-size .5s ease, color .5s ease, opacity .5s ease;
-}
-/* Superseded. Exactly one thing on the page is ever at full weight. */
-.answer.past {
-  font: 400 .95rem/1.6 "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
-  color: var(--dim);
-  opacity: .68;
-}
-.caret { display: inline-block; width: .06em; min-width: 2px; height: .85em; vertical-align: -.05em; background: var(--cyan); margin-left: .06em; }
-
-/* Each word arrives on its own, and lights as it is spoken. The reading head
-   is not decoration: it is where the audio has actually got to. */
-.w { display: inline-block; transition: color .18s ease, text-shadow .18s ease; }
-.answer.past .w { transition: none; }
-.w.saying { color: var(--gold); text-shadow: 0 0 18px rgba(245, 185, 95, .45); }
-.w.said { color: var(--ink); }
-
-/* A schematic per tool, drawn rather than shown. */
-.work li svg { width: 13px; height: 13px; flex: 0 0 auto; overflow: visible; }
-.work li svg * { fill: none; stroke: var(--cyan); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
-
-.took { display: flex; align-items: center; gap: .6rem; font: 400 .64rem/1 "JetBrains Mono", ui-monospace, monospace; color: var(--faint); }
-.track { display: flex; width: 4.5rem; height: 2px; background: var(--rule); }
-.think { background: var(--faint); }
-.write { background: var(--cyan); }
-
-/* She started this one. No prompt above it, so it gets its own mark. */
-.unprompted { margin: 2.4rem 0 .8rem; padding-left: 1.1rem; border-left: 2px solid var(--gold); }
-.unprompted .tag { display: block; margin-bottom: .4rem; font: 500 .62rem/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .24em; text-transform: uppercase; color: var(--gold); }
-.unprompted p { margin: 0; font: 400 clamp(1.2rem, 2vw, 1.5rem)/1.4 "Instrument Serif", ui-serif, Georgia, serif; }
-.wrong { margin: 1rem 0; padding-left: .9rem; border-left: 2px solid var(--wrong); color: var(--wrong); font: 400 .78rem/1.5 "JetBrains Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
-
-/* ── the stage ────────────────────────────────────────────────────────────
-   Where she puts things: a schematic, a chart, a page with places to click.
-   It stands where the core floats, because showing something is what she is
-   doing instead of idling. The iframe is sandboxed to scripts only and its
-   URL carries a key that opens exactly one route, so the page inside can
-   draw and be clicked but cannot reach her. */
-.stage {
-  position: fixed;
-  z-index: 3;
-  top: 4.6rem;
-  right: clamp(1rem, 2.5vw, 2.2rem);
-  bottom: 1.2rem;
-  width: min(56vw, 64rem);
-  display: flex;
-  flex-direction: column;
-  background: rgba(6, 12, 17, .93);
-  border: 1px solid var(--rule);
-}
-.stage[hidden] { display: none; }
-.stage header {
-  display: flex;
-  align-items: baseline;
-  gap: .9rem;
-  padding: .6rem .95rem;
-  border-bottom: 1px solid var(--rule);
-}
-.stage h2 { margin: 0; font: 400 1.05rem/1.3 "Instrument Serif", ui-serif, Georgia, serif; }
-.stage .why {
-  margin: 0 0 0 auto;
-  font: 400 .64rem/1.4 "JetBrains Mono", ui-monospace, monospace;
-  color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity .35s var(--ease);
 }
-.stage .shut {
-  border: 0;
-  background: none;
-  color: var(--faint);
-  cursor: pointer;
-  font: 400 1.05rem/1 "JetBrains Mono", ui-monospace, monospace;
-  padding: 0 .1rem;
-}
-.stage .shut:hover { color: var(--ink); }
-.stage iframe { flex: 1; width: 100%; border: 0; background: var(--void); }
-body[data-screen] #core { opacity: .16; }
+.doing.on { opacity: 1; }
 
-/* A screen exists but he put the stage away: one word in the strip brings it back. */
+.railkeys { margin-left: auto; display: flex; align-items: center; gap: .55rem; flex: 0 0 auto; }
 .chip {
   border: 0;
   background: none;
-  padding: 0;
+  padding: .2rem 0;
   cursor: pointer;
-  font: 500 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
+  font: 500 .62rem/1 var(--mono);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--gold);
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip[hidden] { display: none; }
+.probe {
+  font: 400 .6rem/1 var(--mono);
+  color: var(--faint);
+  letter-spacing: .04em;
+}
+.probe[hidden] { display: none; }
+
+/* ── the floor ────────────────────────────────────────────────────────────
+   Words on the left, her field on the right. When she puts something up, the
+   material takes the right and she steps in behind the words. */
+.floor {
+  display: grid;
+  grid-template-columns: minmax(0, 52ch) minmax(0, 1fr);
+  gap: var(--pad);
+  padding: 0 var(--pad);
+  min-height: 0;
+}
+body[data-stage="on"] .floor { grid-template-columns: minmax(0, 34ch) minmax(0, 1fr); }
+
+/* ── what was said ────────────────────────────────────────────────────────
+   Bottom-aligned, so the newest thing sits where the eye already is and the
+   rest drifts up out of the way. Faded at the top rather than cut, because a
+   hard edge reads as a panel and this is meant to read as memory. */
+.thread {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 1.6rem;
+  padding: 2rem 0 1.2rem;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent, #000 8%, #000 100%);
+}
+.thread::-webkit-scrollbar { width: 0; }
+/* Holds the newest thing at the bottom where the eye already is, and gives up
+   its space the moment there is more to say than room to say it. Bottom
+   alignment by justify-content makes the overflow unreachable instead. */
+.fill { flex: 1 1 0; min-height: 0; }
+
+.turn { flex: 0 0 auto; }
+/* Exactly one exchange is ever at full weight. */
+.turn.past { opacity: .34; }
+.turn.past .her { font-size: .95rem; line-height: 1.5; }
+.turn.past .steps, .turn.past .took { display: none; }
+
+.you {
+  margin: 0 0 .55rem;
+  font: 400 .72rem/1.5 var(--mono);
+  letter-spacing: .02em;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+.you::before { content: "› "; color: var(--faint); }
+/* His hands on her screen, which is not the same act as typing. */
+.you.onscreen::before { content: "screen › "; color: var(--gold); opacity: .75; }
+
+.her {
+  margin: 0;
+  font: 400 clamp(1.25rem, 1.9vw, 1.7rem)/1.38 var(--serif);
+  letter-spacing: -.004em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transition: font-size .45s var(--ease), opacity .45s var(--ease);
+}
+.caret {
+  display: inline-block;
+  width: 1px;
+  height: .82em;
+  vertical-align: -.04em;
+  margin-left: .08em;
+  background: var(--cyan);
+}
+
+/* Each word arrives on its own and lights as it is actually spoken. The head
+   is not decoration: it is where the audio has really got to. */
+.w { display: inline-block; transition: color .16s var(--ease); }
+.turn.past .w { transition: none; color: inherit; }
+.w.saying { color: var(--gold); }
+.w.said { color: var(--ink); }
+
+/* She started this one. No line of his above it, so it gets its own edge. */
+.turn.unbidden { border-left: 1px solid var(--gold); padding-left: .9rem; margin-left: -.9rem; }
+.turn.unbidden .when {
+  display: block;
+  margin-bottom: .4rem;
+  font: 500 .58rem/1 var(--mono);
   letter-spacing: .22em;
   text-transform: uppercase;
   color: var(--gold);
 }
-.chip[hidden] { display: none; }
 
-/* What his hands did on the stage, in the transcript where it happened. */
-.ask.fromscreen::before { content: "screen › "; color: var(--gold); opacity: .8; }
-/* And the moment she put something up. */
-.put {
-  margin: 1.1rem 0;
-  font: 500 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
-  letter-spacing: .18em;
-  text-transform: uppercase;
-  color: var(--gold);
-}
-
-.opening { max-width: 30rem; }
-.opening h2 { margin: 0 0 .7rem; font: 400 clamp(1.9rem, 3.4vw, 2.6rem)/1.14 "Instrument Serif", ui-serif, Georgia, serif; }
-.opening h2 em { font-style: italic; color: var(--cyan); }
-.opening p { margin: 0; color: var(--dim); max-width: 26rem; }
-
-/* ── the dock ─────────────────────────────────────────────────────────── */
-.compose { position: relative; z-index: 2; padding: .5rem clamp(1.3rem, 5vw, 4rem) 1.6rem; }
-.dock { max-width: 44rem; display: flex; align-items: flex-end; gap: .55rem; padding-top: .6rem; border-top: 1px solid var(--rule); transition: border-color .4s ease; }
-.dock:focus-within { border-color: rgba(79, 209, 219, .5); }
-.dock textarea {
-  flex: 1;
-  min-height: 2.1rem;
-  max-height: 28vh;
-  padding: .3rem 0;
+/* The work, folded away. Countable, reachable, and not in the way. */
+.steps {
+  display: block;
+  margin-top: .7rem;
+  padding: 0;
   border: 0;
   background: none;
-  color: inherit;
-  font: 400 1rem/1.5 "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
-  resize: none;
+  cursor: pointer;
+  font: 400 .62rem/1 var(--mono);
+  letter-spacing: .06em;
+  color: var(--faint);
+  text-align: left;
 }
+.steps:hover { color: var(--dim); }
+.steps[hidden] { display: none; }
+.stepped {
+  margin: .6rem 0 0;
+  padding: 0 0 0 .9rem;
+  border-left: 1px solid var(--hair);
+  list-style: none;
+  font: 400 .62rem/1.7 var(--mono);
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+.stepped[hidden] { display: none; }
+.took { margin-top: .5rem; font: 400 .6rem/1 var(--mono); color: var(--faint); letter-spacing: .06em; }
+
+.hitch {
+  margin: 0;
+  padding-left: .8rem;
+  border-left: 1px solid var(--wrong);
+  color: var(--wrong);
+  font: 400 .7rem/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+/* Nothing said yet is nothing shown. Quiet is a legitimate state and it does
+   not need a sentence explaining itself. */
+/* A tab she does not know. It sits where her words would, at their size and
+   in their place, because it is the one thing on screen and it should read
+   like her saying it rather than an error stranded in a corner. */
+.locked {
+  align-self: center;
+  max-width: 34ch;
+  margin: auto 0;
+  font: 400 .74rem/1.7 var(--mono);
+  color: var(--dim);
+}
+.locked b { display: block; margin-bottom: .6rem; font: 400 clamp(1.25rem, 1.9vw, 1.7rem)/1.38 var(--serif); color: var(--ink); }
+.locked code { color: var(--cyan); font-size: .95em; }
+.locked[hidden] { display: none; }
+
+/* ── the stage ────────────────────────────────────────────────────────────
+   What she pulled onto the bench between us. It takes the room; it is not a
+   card sitting on top of one, so it has a hairline and no border of its own. */
+.stage {
+  min-width: 0;
+  display: none;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding-bottom: 1rem;
+}
+body[data-stage="on"] .stage { display: grid; }
+.stage header {
+  display: flex;
+  align-items: baseline;
+  gap: .8rem;
+  padding: 1.5rem 0 .7rem;
+  border-bottom: 1px solid var(--hair);
+  min-width: 0;
+}
+.stage h2 { margin: 0; font: 400 1.15rem/1.3 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage .note {
+  margin: 0;
+  font: 400 .64rem/1.4 var(--mono);
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.stage .shut {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: .1rem .3rem;
+  cursor: pointer;
+  color: var(--faint);
+  font: 400 1rem/1 var(--mono);
+}
+.stage .shut:hover { color: var(--ink); }
+.stage iframe { width: 100%; height: 100%; border: 0; background: transparent; display: block; }
+
+/* ── the dock ─────────────────────────────────────────────────────────────
+   Dormant until he means to type. A hairline and a caret is enough to say
+   "there is a way in" without holding a third of the screen for it. */
+.dock {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  margin: 0 var(--pad);
+  padding: .6rem 0 calc(.7rem + var(--safe-b));
+  border-top: 1px solid var(--hair);
+  transition: border-color .4s var(--ease);
+}
+body[data-typing="on"] .dock { border-top-color: rgba(79, 209, 219, .38); }
+.dock::before {
+  content: "›";
+  color: var(--faint);
+  font: 400 .8rem/1 var(--mono);
+  flex: 0 0 auto;
+  transition: color .3s var(--ease);
+}
+body[data-typing="on"] .dock::before { color: var(--cyan); }
+
+.dock textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1.5rem;
+  max-height: 24vh;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: 400 .84rem/1.5 var(--mono);
+  resize: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.dock textarea::-webkit-scrollbar { width: 0; }
 .dock textarea:focus { outline: none; }
 .dock textarea::placeholder { color: var(--faint); }
 
-.key { display: flex; align-items: center; justify-content: center; width: 2.1rem; height: 2.1rem; flex: 0 0 auto; border: 0; background: none; color: var(--faint); cursor: pointer; transition: color .2s; }
+.key {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--faint);
+  transition: color .2s var(--ease);
+}
 .key:hover { color: var(--ink); }
 .key:focus-visible { outline: 1px solid var(--cyan); outline-offset: 3px; }
-.key[aria-pressed="true"] { color: var(--gold); }
-.key.hot { color: var(--gold); }
 .key[hidden] { display: none; }
-.key svg { width: 1.05rem; height: 1.05rem; fill: currentColor; }
-.go { width: auto; padding: 0 .2rem; font: 500 .68rem/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase; color: var(--cyan); }
-.go:hover { color: var(--ink); }
-.hint { max-width: 44rem; margin: .55rem 0 0; font: 400 .62rem/1 "JetBrains Mono", ui-monospace, monospace; color: var(--faint); letter-spacing: .05em; }
+.key svg { width: 1rem; height: 1rem; fill: currentColor; }
+.key[aria-pressed="true"] { color: var(--gold); }
+.key.hot { color: var(--ink); }
+.send {
+  width: auto;
+  padding: 0 .1rem;
+  font: 500 .62rem/1 var(--mono);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s var(--ease);
+}
+body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
 
-@media (max-width: 900px) {
-  .stage { width: calc(100vw - 2rem); top: 4.2rem; right: 1rem; }
+/* The handle that pulls memory up. Only earns its place on a phone, where the
+   thread is not on screen to begin with. */
+.pull {
+  display: none;
+  position: absolute;
+  top: -1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 0;
+  background: none;
+  padding: .35rem 1.4rem;
+  cursor: pointer;
+  color: var(--faint);
+  font: 500 .56rem/1 var(--mono);
+  letter-spacing: .22em;
+  text-transform: uppercase;
 }
-@media (max-width: 760px) {
-  #core { right: -30vmin; opacity: .5; width: min(70vh, 110vw); height: min(70vh, 110vw); }
-  .meta { display: none; }
-  .strip { gap: 1rem; }
+
+/* ── narrow ───────────────────────────────────────────────────────────────
+   Not the desk folded up. A different body for the same intelligence: her
+   state, the one thing that matters now, and a way to answer. Memory is
+   pulled up when he wants it rather than filling the screen by default. */
+@media (max-width: 860px) {
+  :root { --rail: 2.4rem; }
+  .floor { grid-template-columns: 100%; padding: 0 var(--pad); }
+  body[data-stage="on"] .floor { grid-template-columns: 100%; }
+
+  /* Her field is the centre; words sit low in it and stay short. */
+  .thread {
+    padding: 1rem 0 .6rem;
+    gap: 1.1rem;
+    max-height: 100%;
+  }
+  .her { font-size: clamp(1.15rem, 5vw, 1.5rem); }
+  .turn.past { display: none; }
+
+  /* Pulled up, memory covers the room rather than sharing it. */
+  body[data-memory="on"] .thread {
+    position: fixed;
+    inset: var(--rail) 0 0;
+    z-index: 4;
+    padding: 1.2rem var(--pad) 5rem;
+    background: rgba(5, 9, 13, .97);
+    gap: 1.4rem;
+  }
+  body[data-memory="on"] .fill { display: none; }
+  body[data-memory="on"] .turn.past { display: block; }
+
+  /* Shown on a phone, the material is the interface. */
+  body[data-stage="on"] .thread { display: none; }
+  body[data-stage="on"][data-memory="on"] .thread { display: flex; }
+  .stage { padding-bottom: .4rem; }
+  .stage header { padding-top: .5rem; }
+  .stage h2 { font-size: 1rem; }
+  .stage .note { display: none; }
+
+  /* Above the memory sheet, always. It covers the room when it is up, and a
+     way in that is underneath it is a way in he cannot reach — including the
+     handle that closes the sheet again. */
+  .dock {
+    position: relative;
+    z-index: 5;
+    background: var(--void);
+    gap: .55rem;
+    padding-bottom: calc(.6rem + var(--safe-b));
+  }
+  .pull { display: block; }
+  body[data-memory="on"] .pull { color: var(--dim); }
+  /* A finger needs more than a cursor does, without becoming a toolbar. */
+  .key { width: 2.4rem; height: 2.4rem; }
+  .key svg { width: 1.15rem; height: 1.15rem; }
+  .dock textarea { font-size: 16px; } /* iOS zooms anything smaller on focus */
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Landscape on a phone: almost no height, so the rail and the words give way
+   and whatever she is showing keeps nearly all of it. */
+@media (max-height: 460px) and (orientation: landscape) {
+  :root { --rail: 2rem; }
+  .thread { padding: .5rem 0; gap: .7rem; }
+  .her { font-size: 1.05rem; }
+  .stage header { padding-top: .35rem; padding-bottom: .4rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
 </style>
 </head>
 <body data-state="idle">
 
-<div class="wash"></div>
-<canvas id="core" width="900" height="900" aria-hidden="true"></canvas>
+<canvas id="field" aria-hidden="true"></canvas>
 
-<header class="strip">
-  <h1 class="wordmark">V<em>e</em>la</h1>
-  <p class="mode" id="mode">connecting</p>
-  <button type="button" class="chip" id="chip" hidden title="Bring the screen back"></button>
-  <p class="meta">
-    <span>turns <b id="turns">0</b></span>
-    <span>tools <b id="tools">0</b></span>
-    <span id="build">—</span>
-  </p>
-</header>
-
-<div class="scroll" id="scroll">
-  <div class="log" id="log">
-    <div class="opening" id="opening">
-      <h2>She has been running this whole <em>time</em>.</h2>
-      <p>The same session as the terminal, not a second one. Anything typed there appears here, and when a watch fires she starts a line herself.</p>
+<div class="room">
+  <header class="rail">
+    <h1 class="mark">V<em>e</em>la</h1>
+    <p class="state" id="state">connecting</p>
+    <p class="doing" id="doing"></p>
+    <div class="railkeys">
+      <button type="button" class="chip" id="chip" hidden></button>
+      <span class="probe" id="probe" hidden></span>
     </div>
-  </div>
-</div>
-
-<section class="stage" id="stage" hidden aria-label="Her screen">
-  <header>
-    <h2 id="stageTitle"></h2>
-    <p class="why" id="stageNote"></p>
-    <button type="button" class="shut" id="stageShut" title="Put it away">×</button>
   </header>
-  <iframe id="stageFrame" sandbox="allow-scripts" title="What she is showing"></iframe>
-</section>
 
-<form class="compose" id="compose">
-  <div class="dock">
-    <textarea id="text" rows="1" placeholder="Say something" autocomplete="off" autofocus></textarea>
-    <button type="button" class="key" id="mic" title="Speak. Press again to send." hidden>
+  <div class="floor">
+    <div class="thread" id="thread" aria-live="polite">
+      <div class="fill"></div>
+      <div class="locked" id="locked" hidden></div>
+    </div>
+
+    <section class="stage" id="stage" aria-label="What she is showing">
+      <header>
+        <h2 id="stageTitle"></h2>
+        <p class="note" id="stageNote"></p>
+        <button type="button" class="shut" id="stageShut" title="Put it away" aria-label="Put it away">×</button>
+      </header>
+      <iframe id="stageFrame" sandbox="allow-scripts" title="What she is showing"></iframe>
+    </section>
+  </div>
+
+  <form class="dock" id="dock">
+    <button type="button" class="pull" id="pull" aria-label="Show what was said">memory</button>
+    <textarea id="text" rows="1" placeholder="" autocomplete="off" spellcheck="false" aria-label="Say something"></textarea>
+    <button type="submit" class="key send" id="send">send</button>
+    <button type="button" class="key" id="mic" title="Speak. Press again to send." aria-label="Speak" hidden>
       <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V22h2v-3.1A7 7 0 0 0 19 12Z"/></svg>
     </button>
-    <button type="button" class="key" id="ear" title="Hear her replies" aria-pressed="false" hidden>
+    <button type="button" class="key" id="ear" title="Hear her replies" aria-label="Hear her replies" aria-pressed="false" hidden>
       <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9H4Zm13.5 3A4.5 4.5 0 0 0 15 8v8a4.5 4.5 0 0 0 2.5-4Z"/></svg>
     </button>
-    <button type="submit" class="key go">Send</button>
-  </div>
-  <p class="hint" id="hint">Enter sends · Shift and Enter for a new line</p>
-</form>
+  </form>
+</div>
 
 <script src="/anime.js"></script>
 <script>
@@ -349,254 +549,424 @@ body[data-screen] #core { opacity: .16; }
    sandboxed screen frame has no way to read. */
 const STORE = "vela.key";
 const fromBar = new URLSearchParams(location.search).get("k") || "";
-let saved = "";
-try { saved = localStorage.getItem(STORE) || ""; } catch { saved = ""; }
+let stored = "";
+try { stored = localStorage.getItem(STORE) || ""; } catch { stored = ""; }
 if (fromBar) {
   try { localStorage.setItem(STORE, fromBar); } catch { /* private window; this tab still works */ }
   history.replaceState(null, "", location.pathname);
 }
-const KEY = fromBar || saved;
+const KEY = fromBar || stored;
 const auth = { authorization: "Bearer " + KEY };
+const json = Object.assign({ "content-type": "application/json" }, auth);
 
 const $ = (id) => document.getElementById(id);
-const log = $("log"), scroll = $("scroll"), opening = $("opening");
-const modeEl = $("mode"), buildEl = $("build"), turnsEl = $("turns"), toolsEl = $("tools");
-const form = $("compose"), text = $("text"), micKey = $("mic"), earKey = $("ear"), hintEl = $("hint");
+const thread = $("thread"), stateEl = $("state"), doingEl = $("doing"), lockedEl = $("locked");
+const dock = $("dock"), text = $("text"), micKey = $("mic"), earKey = $("ear"), sendKey = $("send");
 const stage = $("stage"), stageTitle = $("stageTitle"), stageNote = $("stageNote");
-const stageFrame = $("stageFrame"), stageShut = $("stageShut"), chip = $("chip");
+const stageFrame = $("stageFrame"), stageShut = $("stageShut"), chip = $("chip"), probe = $("probe");
+const pull = $("pull");
 
 const A = window.anime || null;
 const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const animate = (t, o) => (A && !still ? A.animate(t, o) : null);
+const phone = () => matchMedia("(max-width: 860px)").matches;
+
+/* Declared up here because her posture depends on them and the first paint
+   happens before the stage section below has run. */
+let screenUp = null, stageHidden = false;
 
 /* ════════════════════════════════════════════════════════════════════════
-   THE CORE
+   HER PRESENCE
 
-   The room the text sits in, not a widget beside it. Its rim follows the
-   amplitude of whatever is actually making noise: her voice when she speaks,
-   his when the microphone is open. Nothing here loops pretending to be busy.
+   The whole viewport is the field she is in, so this is painted behind
+   everything rather than parked in a corner. Every number it draws with comes
+   from something real: the amplitude of whoever is actually making noise, the
+   tool calls she actually made, the state she is actually in.
+
+   It holds still when she is idle, and it means it — the loop stops rather
+   than repainting a still image sixty times a second. She lives on a second
+   monitor all day, and motion that carries nothing is worse than nothing: it
+   costs him a core and tells him what he already knew.
    ════════════════════════════════════════════════════════════════════════ */
-const core = $("core");
-const g = core.getContext("2d");
-const CX = 450, CY = 450;
+const canvas = $("field");
+const g = canvas.getContext("2d");
+let W = 0, H = 0;
 
+const INK = [122, 146, 158];
 const CYAN = [79, 209, 219];
 const GOLD = [245, 185, 95];
 const rgba = (c, a) => "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")";
-const mix = (a, b, t) => [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * t));
+const mix = (a, b, t) => [0, 1, 2].map((i) => a[i] + (b[i] - a[i]) * t);
 
-const core_ = { warmth: 0, energy: 0, amp: 0, spin: 0, ripples: [] };
+/* Where she is and what she is doing, as numbers the painter can read.
+   `cx`, `cy` and `r` are fractions of the viewport, so her posture survives a
+   resize; the rest are levels the state machine sets and this eases towards. */
+const her = { cx: .68, cy: .5, r: .40, energy: 0, warmth: 0, pale: 0, amp: 0, spin: 0 };
+const want = { cx: .68, cy: .5, r: .40, energy: 0, warmth: 0, pale: 0 };
+let ripples = [];
 let analyser = null, ampData = null;
+let painting = false;
 
-function drawCore(now) {
-  requestAnimationFrame(drawCore);
-  g.clearRect(0, 0, 900, 900);
+function measure() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth;
+  H = innerHeight;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  posture();
+  wake();
+}
 
-  let target = 0;
+/**
+ * Where she stands, given what the room is doing.
+ *
+ * One organism changing posture rather than widgets appearing: when she is
+ * showing him something she moves in behind the words and gives the material
+ * the floor; when nothing is happening she has the room.
+ */
+function posture() {
+  const narrow = phone();
+  if (screenUp && !stageHidden) {
+    // Showing something. Step aside and get small.
+    want.cx = narrow ? .5 : .17;
+    want.cy = narrow ? .5 : .8;
+    want.r = narrow ? .1 : .13;
+  } else if (narrow) {
+    want.cx = .5;
+    want.cy = .42;
+    want.r = .34;
+  } else {
+    // The room is hers. Tighten a little while she is actually working.
+    const busy = document.body.dataset.state === "working";
+    want.cx = busy ? .70 : .66;
+    want.cy = .5;
+    want.r = busy ? .32 : .38;
+  }
+  wake();
+}
+
+const settled = () =>
+  Math.abs(her.cx - want.cx) < .001 &&
+  Math.abs(her.cy - want.cy) < .001 &&
+  Math.abs(her.r - want.r) < .001 &&
+  Math.abs(her.energy - want.energy) < .01 &&
+  Math.abs(her.warmth - want.warmth) < .01 &&
+  Math.abs(her.pale - want.pale) < .01 &&
+  her.amp < .01;
+
+/** Anything to say? Otherwise the last frame stands and the loop stops. */
+const moving = () => Boolean(analyser) || ripples.length > 0 || !settled() || her.energy > .01;
+
+function wake() {
+  if (painting) return;
+  painting = true;
+  requestAnimationFrame(paint);
+}
+
+function paint(now) {
+  const ease = still ? 1 : .12;
+  her.cx += (want.cx - her.cx) * ease;
+  her.cy += (want.cy - her.cy) * ease;
+  her.r += (want.r - her.r) * ease;
+  her.energy += (want.energy - her.energy) * ease;
+  her.warmth += (want.warmth - her.warmth) * ease;
+  her.pale += (want.pale - her.pale) * ease;
+
+  let peak = 0;
   if (analyser) {
     analyser.getByteTimeDomainData(ampData);
-    let peak = 0;
     for (let i = 0; i < ampData.length; i++) peak = Math.max(peak, Math.abs(ampData[i] - 128));
-    target = Math.min(1, peak / 70);
+    peak = Math.min(1, peak / 70);
   }
-  core_.amp += (target - core_.amp) * 0.22;
+  her.amp += (peak - her.amp) * .25;
+  if (!still) her.spin += .0009 + her.energy * .004;
 
-  const tint = mix(CYAN, GOLD, core_.warmth);
-  const breath = Math.sin(now / 1800) * 0.5 + 0.5;
-  core_.spin += 0.0012 + core_.energy * 0.005;
+  g.clearRect(0, 0, W, H);
 
-  // Three nested rims. The outer two are slow and structural; the inner one
-  // is the voice, and it is the only thing that moves quickly.
-  for (let ring = 0; ring < 3; ring++) {
-    const inner = ring === 0;
-    const base = 210 + ring * 78 + breath * (inner ? 8 : 3);
-    g.beginPath();
-    const STEPS = 200;
-    for (let i = 0; i <= STEPS; i++) {
-      const a = (i / STEPS) * Math.PI * 2;
-      const wob =
-        Math.sin(a * (3 + ring) + core_.spin * (6 - ring * 1.6)) * (5 - ring) +
-        Math.sin(a * (7 + ring * 2) - core_.spin * 9) * 2.4;
-      const voice = inner ? core_.amp * 92 * (0.66 + 0.34 * Math.sin(a * 5 + now / 200)) : 0;
-      const r = base + wob * (0.5 + core_.energy) + voice;
-      const x = CX + Math.cos(a) * r, y = CY + Math.sin(a) * r;
-      i ? g.lineTo(x, y) : g.moveTo(x, y);
-    }
-    g.closePath();
-    g.strokeStyle = rgba(tint, inner ? 0.72 : 0.2 - ring * 0.05);
-    g.lineWidth = inner ? 1.7 : 1;
-    g.stroke();
-    if (inner) { g.fillStyle = rgba(tint, 0.035 + core_.amp * 0.07); g.fill(); }
-  }
+  const cx = her.cx * W, cy = her.cy * H;
+  const R = her.r * Math.min(W, H);
+  // Cyan is work, gold is her voice, pale is his. Warmth wins, because when
+  // she is speaking that is the only thing worth saying about her.
+  const base = mix(mix(INK, CYAN, her.energy), GOLD, her.warmth);
+  const tint = mix(base, [225, 240, 246], her.pale * .5);
+  const lift = her.amp * .55 + her.energy * .18 + her.warmth * .2;
 
-  // Two arcs that tighten and speed up while she works. Peripheral by design:
-  // you notice them without looking at them.
+  // Two quiet rims. These are the shape of her at rest and they barely exist.
   for (let ring = 0; ring < 2; ring++) {
-    const dir = ring ? -1 : 1;
     g.beginPath();
-    g.arc(CX, CY, 300 + ring * 44, core_.spin * dir * 2.2 + ring, core_.spin * dir * 2.2 + ring + 0.45 + core_.energy * 0.8);
-    g.strokeStyle = rgba(tint, 0.14 + core_.energy * 0.34);
-    g.lineWidth = ring ? 1 : 2.4;
+    g.arc(cx, cy, R * (1 + ring * .34), 0, Math.PI * 2);
+    g.strokeStyle = rgba(tint, (ring ? .05 : .09) + lift * .1);
+    g.lineWidth = 1;
     g.stroke();
   }
 
-  // A dotted horizon so the whole thing has a floor and does not swim.
+  // The voice. The only part that moves quickly, and only when something is
+  // actually making noise.
   g.beginPath();
-  for (let i = 0; i < 90; i++) {
-    const a = (i / 90) * Math.PI * 2, r = 408;
-    g.moveTo(CX + Math.cos(a) * r, CY + Math.sin(a) * r);
-    g.lineTo(CX + Math.cos(a) * (r + 5), CY + Math.sin(a) * (r + 5));
+  const STEPS = 168;
+  for (let i = 0; i <= STEPS; i++) {
+    const a = (i / STEPS) * Math.PI * 2;
+    const wob = still ? 0 : Math.sin(a * 3 + her.spin * 4) * 2 + Math.sin(a * 7 - her.spin * 6) * 1.2;
+    const voice = her.amp * R * .30 * (.62 + .38 * Math.sin(a * 5 + now / 190));
+    const rr = R * .72 + wob * (.4 + her.energy) + voice;
+    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
   }
-  g.strokeStyle = rgba(tint, 0.11);
-  g.lineWidth = 1;
+  g.closePath();
+  g.strokeStyle = rgba(tint, .2 + lift * .55);
+  g.lineWidth = 1.2;
   g.stroke();
+  if (her.amp > .01 || her.warmth > .01) {
+    g.fillStyle = rgba(tint, .015 + her.amp * .05);
+    g.fill();
+  }
+
+  // Working: one arc, tightening as she goes. Peripheral by design — noticed
+  // without being looked at, and absent the moment she stops.
+  if (her.energy > .01 && !still) {
+    g.beginPath();
+    g.arc(cx, cy, R * 1.18, her.spin * 2.1, her.spin * 2.1 + .5 + her.energy * .9);
+    g.strokeStyle = rgba(tint, .1 + her.energy * .4);
+    g.lineWidth = 1.6;
+    g.stroke();
+  }
 
   // One ring per tool call, so the work is countable rather than decorative.
-  for (let i = core_.ripples.length - 1; i >= 0; i--) {
-    const rip = core_.ripples[i];
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const rip = ripples[i];
     const t = (now - rip.at) / rip.life;
-    if (t >= 1) { core_.ripples.splice(i, 1); continue; }
+    if (t >= 1) { ripples.splice(i, 1); continue; }
     g.beginPath();
-    g.arc(CX, CY, 200 + t * 230, 0, Math.PI * 2);
-    g.strokeStyle = rgba(rip.warm ? GOLD : tint, (1 - t) * 0.45);
-    g.lineWidth = 1.6 * (1 - t) + 0.3;
+    g.arc(cx, cy, R * (.72 + t * .62), 0, Math.PI * 2);
+    g.strokeStyle = rgba(rip.warm ? GOLD : tint, (1 - t) * .3);
+    g.lineWidth = 1.2 * (1 - t) + .2;
     g.stroke();
   }
+
+  if (moving()) requestAnimationFrame(paint);
+  else painting = false;
 }
-requestAnimationFrame(drawCore);
 
-const ripple = (warm) => core_.ripples.push({ at: performance.now(), life: warm ? 2400 : 1400, warm: !!warm });
-
-/* ════════════════════════════════════════════════════════════════════════
-   Schematics
-
-   A tool line is a verb and an object: "Read ambient.ts", "Grep heartbeat",
-   "gws-calendar +agenda". The verb says what kind of work it was, so it gets
-   a drawing rather than a bullet. Line art only, drawn on with the stroke,
-   because a filled icon set would read as a toolbar and this is a readout.
-   ════════════════════════════════════════════════════════════════════════ */
-const GLYPHS = {
-  file: "M4 2h7l4 4v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z M11 2v4h4",
-  find: "M8.5 3a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Z M12.5 12.5 17 17",
-  shell: "M3 4h14v11H3z M6 8l2.5 2L6 12 M10.5 12H14",
-  web: "M10 2.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15Z M2.5 10h15 M10 2.5c2 2.5 2 12.5 0 15 M10 2.5c-2 2.5-2 12.5 0 15",
-  time: "M4 4h12v13H4z M4 8h12 M7 2v4 M13 2v4 M8 12h4",
-  mail: "M3 5h14v10H3z M3 5l7 6 7-6",
-  brain: "M6 4h8v5a4 4 0 0 1-8 0Z M8 13v4 M12 13v4 M6 17h8",
-  screen: "M3 4h14v9H3z M8 16h4 M10 13v3",
-  write: "M4 15l1-4 8-8 3 3-8 8-4 1Z",
-  work: "M10 2v4 M10 14v4 M2 10h4 M14 10h4 M10 6a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z",
+const ripple = (warm) => {
+  if (still) return;
+  ripples.push({ at: performance.now(), life: warm ? 2200 : 1300, warm: !!warm });
+  wake();
 };
 
-/** What kind of work a tool line describes, from the verb at the front. */
-function glyphFor(line) {
-  const v = line.trim().split(/[\s(]/)[0].toLowerCase();
-  if (/read|cat|head|tail|open/.test(v)) return "file";
-  if (/grep|glob|find|search|screen/.test(v)) return "find";
-  if (/bash|shell|powershell|npm|git|run/.test(v)) return "shell";
-  if (/web|fetch|reach|http|browser_history|curl/.test(v)) return "web";
-  if (/calendar|agenda|watch|heartbeat|tick/.test(v)) return "time";
-  if (/gmail|mail|send|triage/.test(v)) return "mail";
-  if (/remember|forget|memory|vault|recall/.test(v)) return "brain";
-  if (/launch_app|desktop|media_control|window/.test(v)) return "screen";
-  if (/write|edit|multiedit|notebook/.test(v)) return "write";
-  return "work";
-}
+addEventListener("resize", measure);
+measure();
 
-/** Draw it on, rather than switch it on. */
-function schematic(kind) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 20 20");
-  for (const d of GLYPHS[kind].trim().split(/\s+M/).map((p, i) => (i ? "M" + p : p))) {
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", d);
-    svg.append(path);
-  }
-  if (A && !still) {
-    for (const path of svg.querySelectorAll("path")) {
-      const len = 60;
-      path.style.strokeDasharray = len;
-      path.style.strokeDashoffset = len;
-      A.animate(path, { strokeDashoffset: [len, 0], duration: 520, ease: "outQuad" });
-    }
-  }
-  return svg;
-}
+/* ════════════════════════════════════════════════════════════════════════
+   State
 
-function setState(state, label) {
+   Five words, and each of them is true of something the core actually said.
+   ════════════════════════════════════════════════════════════════════════ */
+function setState(state, word) {
   document.body.dataset.state = state;
-  modeEl.textContent = label;
-  const warmth = state === "speaking" || state === "listening" ? 1 : 0;
-  const energy = state === "thinking" ? 1 : state === "listening" ? 0.55 : state === "speaking" ? 0.4 : 0;
-  if (A && !still) A.animate(core_, { warmth, energy, duration: 750, ease: "outQuad" });
-  else { core_.warmth = warmth; core_.energy = energy; }
-  animate(modeEl, { opacity: [0.25, 1], duration: 420 });
+  stateEl.textContent = word;
+  want.energy = state === "working" ? 1 : 0;
+  want.warmth = state === "speaking" ? 1 : 0;
+  want.pale = state === "listening" ? 1 : 0;
+  posture();
+}
+
+function doing(line) {
+  // Cleared out, not just faded: a line left in the DOM at zero opacity is
+  // still a line a screen reader reads out as though she were still on it.
+  doingEl.textContent = line || "";
+  doingEl.classList.toggle("on", Boolean(line));
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   The log
+   What was said
    ════════════════════════════════════════════════════════════════════════ */
-let open = null, turns = 0, tools = 0, pinned = true;
-scroll.addEventListener("scroll", () => {
-  pinned = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+let open = null, pinned = true;
+thread.addEventListener("scroll", () => {
+  pinned = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 60;
 });
-const follow = () => { if (pinned) scroll.scrollTop = scroll.scrollHeight; };
-const begun = () => {
-  if (!opening.isConnected) return;
-  if (A && !still) A.animate(opening, { opacity: 0, translateY: -10, duration: 280, ease: "inQuad", onComplete: () => opening.remove() });
-  else opening.remove();
-};
-const enter = (el, from) => animate(el, { opacity: [0, 1], translateY: [from || 8, 0], duration: 420, ease: "outCubic" });
+const follow = () => { if (pinned) thread.scrollTop = thread.scrollHeight; };
+const enter = (el, from) => animate(el, { opacity: [0, 1], translateY: [from === undefined ? 8 : from, 0], duration: 400, ease: "outCubic" });
 
-/** Exactly one answer is ever at full weight. Everything before it steps down. */
+/** Exactly one exchange is ever at full weight. */
 function recede() {
-  for (const el of log.querySelectorAll(".answer:not(.past)")) el.classList.add("past");
+  for (const el of thread.querySelectorAll(".turn:not(.past)")) el.classList.add("past");
 }
 
-function yours(said) {
-  begun();
+function turnEl(cls) {
+  const el = document.createElement("article");
+  el.className = "turn" + (cls ? " " + cls : "");
+  thread.append(el);
+  return el;
+}
+
+function yours(said, onscreen) {
+  recede();
+  const el = turnEl();
   const p = document.createElement("p");
-  p.className = "ask";
+  p.className = "you" + (onscreen ? " onscreen" : "");
   p.textContent = said;
-  log.append(p);
-  enter(p);
+  el.append(p);
+  enter(el);
   follow();
+  return el;
 }
 
+/** Her half of the exchange he is in the middle of. */
 function hers() {
   if (open) return open;
-  begun();
-  recede();
-  const work = document.createElement("ul");
-  work.className = "work";
-  work.hidden = true;
-  const answer = document.createElement("p");
-  answer.className = "answer";
+  const last = thread.querySelector(".turn:last-child");
+  // Attach to the line he just said, unless she is starting this herself.
+  const el = last && !last.classList.contains("past") && !last.querySelector(".her")
+    ? last
+    : (recede(), turnEl());
+
+  const said = document.createElement("p");
+  said.className = "her";
   const caret = document.createElement("span");
   caret.className = "caret";
-  answer.append(caret);
-  log.append(work, answer);
-  enter(answer, 10);
-  animate(caret, { opacity: [1, 0.12], duration: 640, loop: true, alternate: true, ease: "inOutSine" });
-  open = { work, answer, caret, startedAt: Date.now(), firstDelta: 0, words: "", spoken: 0, emitted: 0, spans: [] };
-  setState("thinking", "working");
+  said.append(caret);
+  el.append(said);
+  enter(said, 6);
+  animate(caret, { opacity: [1, .15], duration: 620, loop: true, alternate: true, ease: "inOutSine" });
+
+  // `raw` is what she actually sent; `words` is that with the markdown taken
+  // out, which is what is drawn and what the reading head measures against.
+  open = { el, said, caret, startedAt: Date.now(), firstDelta: 0, raw: "", words: "", spoken: 0, emitted: 0, spans: [], steps: [] };
+  setState("working", "working");
   follow();
   return open;
 }
 
+/* ── what she did, in words ───────────────────────────────────────────────
+   A tool line is a verb and an object: "Read core.ts", "Bash npm test",
+   "gws-calendar +agenda". Counted by verb they become a sentence, which is
+   what he actually wants to know after the fact — "read two files and ran a
+   command" rather than a column of tool names. The counts are real, because
+   a summary that rounds off what she touched is worse than no summary. */
+function stepKind(line) {
+  const v = line.trim().split(/[\s(]/)[0].toLowerCase();
+  if (/^(read|cat|head|tail|open|notebookread)$/.test(v)) return "read";
+  if (/^(write|edit|multiedit|notebookedit)$/.test(v)) return "changed";
+  if (/^(grep|glob|find|search)$/.test(v)) return "searched";
+  if (/^(bash|powershell|shell|npm|git|run)$/.test(v)) return "ran";
+  if (/^(webfetch|websearch|curl)$/.test(v) || v.includes("reach")) return "web";
+  if (/^(remember|recall|forget)$/.test(v)) return "memory";
+  if (/^(launch_app|media_control|list_windows|browser_history)$/.test(v)) return "desktop";
+  if (/^(watch|list_watches|resolve_watch)$/.test(v)) return "watch";
+  if (/^(show_screen|clear_screen)$/.test(v)) return "screen";
+  if (v.startsWith("gws-calendar")) return "calendar";
+  if (v.startsWith("gws-gmail")) return "mail";
+  if (v.startsWith("gws-")) return "google";
+  return "other";
+}
+
+const NUMBER = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+const count = (n) => (n < NUMBER.length ? NUMBER[n] : String(n));
+
+function phraseFor(kind, n) {
+  const many = n > 1;
+  switch (kind) {
+    case "read": return "read " + count(n) + (many ? " files" : " file");
+    case "changed": return "changed " + count(n) + (many ? " files" : " file");
+    case "searched": return many ? "searched " + count(n) + " times" : "searched";
+    case "ran": return "ran " + count(n) + (many ? " commands" : " command");
+    case "web": return many ? "looked " + count(n) + " things up" : "looked something up";
+    case "memory": return many ? "went through her memory" : "checked her memory";
+    case "desktop": return "used the desktop";
+    case "watch": return many ? "sorted the watches" : "set a watch";
+    case "screen": return "put something on screen";
+    case "calendar": return "checked your calendar";
+    case "mail": return "checked your mail";
+    case "google": return "used your Google account";
+    default: return count(n) + (many ? " other things" : " other thing");
+  }
+}
+
+function inWords(lines) {
+  const tally = new Map();
+  for (const line of lines) {
+    const kind = stepKind(line);
+    tally.set(kind, (tally.get(kind) || 0) + 1);
+  }
+  const groups = [...tally].sort((a, b) => b[1] - a[1]);
+  const said = groups.slice(0, 3).map(([kind, n]) => phraseFor(kind, n));
+  const rest = groups.slice(3).reduce((sum, [, n]) => sum + n, 0);
+  if (rest) said.push(count(rest) + " more");
+  if (said.length === 1) return said[0];
+  return said.slice(0, -1).join(", ") + " and " + said[said.length - 1];
+}
+
+/* How many of them are worth building. Thirty nodes under every exchange, in
+   a page he leaves open for days, is a cost nobody reads the bottom of. The
+   rest are one click away and are not built until he asks. */
+const RECENT_STEPS = 7;
+
 function tool(lines) {
   const t = hers();
   for (const line of lines) {
-    const li = document.createElement("li");
-    li.append(schematic(glyphFor(line)));
-    li.append(document.createTextNode(line));
-    t.work.append(li);
-    enter(li, 0);
+    t.steps.push(line);
     ripple(false);
-    toolsEl.textContent = ++tools;
   }
-  t.work.hidden = false;
+  doing(lines[lines.length - 1]);
   follow();
+}
+
+/* ── markdown ─────────────────────────────────────────────────────────────
+   She writes plain sentences in conversation and markdown when she is doing
+   real work, and both arrive here. Set in the display serif, `**like this**`
+   reads as broken rather than as emphasis, and handed to Kokoro it is read
+   out loud as asterisks.
+
+   Two cleanings, because the eye and the ear want different things: the eye
+   wants the code kept and the markers gone, the ear wants to be told there
+   was code and to move on. Mirrors speakable() in voice.ts. */
+
+/**
+ * How much of a streaming reply is safe to strip.
+ *
+ * A pair of markers is only a pair once the second half has arrived, so
+ * `**bol` is not emphasis yet and stripping it would take away a marker that
+ * turns out to be literal. Everything from the last unclosed marker onward
+ * waits for the rest.
+ */
+function settledUpto(raw) {
+  let i = 0, open = null, opened = 0;
+  while (i < raw.length) {
+    const two = raw.slice(i, i + 2);
+    if (!open && two === "**") { open = "**"; opened = i; i += 2; continue; }
+    if (open === "**" && two === "**") { open = null; i += 2; continue; }
+    if (!open && raw[i] === "`") { open = "`"; opened = i; i += 1; continue; }
+    if (open === "`" && raw[i] === "`") { open = null; i += 1; continue; }
+    i++;
+  }
+  return open ? opened : raw.length;
+}
+
+/** For the eye: the markers go, everything they were wrapped around stays. */
+function forReading(text) {
+  return text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+}
+
+/** For the ear: the same, plus the things that only make sense on a page. */
+function forSaying(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, " code block. ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, " a link ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/[A-Za-z]:[\\/][\w.\-\\/ ]+[\\/]([\w.\-]+)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -617,21 +987,15 @@ function renderWords(t, final) {
     at += tok.length;
     if (i < t.emitted || !tok) continue;
     if (/^\s+$/.test(tok)) {
-      t.answer.insertBefore(document.createTextNode(tok), t.caret);
+      t.said.insertBefore(document.createTextNode(tok), t.caret);
       continue;
     }
     const span = document.createElement("span");
     span.className = "w";
     span.textContent = tok;
-    t.answer.insertBefore(span, t.caret);
+    t.said.insertBefore(span, t.caret);
     t.spans.push({ el: span, start, end: at });
-    animate(span, {
-      opacity: [0, 1],
-      filter: ["blur(5px)", "blur(0px)"],
-      translateY: [5, 0],
-      duration: 320,
-      ease: "outQuad",
-    });
+    animate(span, { opacity: [0, 1], filter: ["blur(4px)", "blur(0px)"], duration: 280, ease: "outQuad" });
   }
   t.emitted = Math.max(t.emitted, upto);
 }
@@ -639,7 +1003,10 @@ function renderWords(t, final) {
 function delta(chunk) {
   const t = hers();
   if (!t.firstDelta) t.firstDelta = Date.now();
-  t.words += chunk;
+  t.raw += chunk;
+  // Only the part with no half-written marker in it. The rest is one chunk
+  // away and drawing it now would show a `**` that is about to disappear.
+  t.words = forReading(t.raw.slice(0, settledUpto(t.raw)));
   renderWords(t);
   speakReady(t);
   follow();
@@ -648,55 +1015,93 @@ function delta(chunk) {
 function done(ms, fallback) {
   const t = open;
   if (!t) return;
-  if (fallback && !t.words) t.words = fallback;
+  if (fallback && !t.raw) t.raw = fallback;
+  // Nothing more is coming, so the marker that never closed was literal.
+  t.words = forReading(t.raw);
   renderWords(t, true);
   t.caret.remove();
   speakRest(t);
+  doing("");
 
   const total = ms || Date.now() - t.startedAt;
-  const think = t.firstDelta ? t.firstDelta - t.startedAt : total;
-  const pct = Math.max(4, Math.min(96, Math.round((think / total) * 100)));
-  const took = document.createElement("p");
-  took.className = "took";
-  took.innerHTML =
-    '<span class="track"><span class="think" style="width:' + pct + '%"></span>' +
-    '<span class="write" style="width:' + (100 - pct) + '%"></span></span>' +
-    "<span>" + (think / 1000).toFixed(1) + "s to first word · " + (total / 1000).toFixed(1) + "s</span>";
-  log.append(took);
-  enter(took, 4);
+  if (t.steps.length) {
+    const list = document.createElement("ul");
+    list.className = "stepped";
+    list.hidden = true;
+
+    const shown = t.steps.slice(-RECENT_STEPS);
+    const earlier = t.steps.slice(0, t.steps.length - shown.length);
+    const put = (line, before) => {
+      const li = document.createElement("li");
+      li.textContent = line;
+      list.insertBefore(li, before || null);
+      return li;
+    };
+    for (const line of shown) put(line);
+
+    // Older than the last few: named, counted, and built only if he asks.
+    if (earlier.length) {
+      const more = document.createElement("li");
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "steps";
+      link.textContent = count(earlier.length) + " more before that";
+      link.addEventListener("click", () => {
+        for (const line of earlier) put(line, more);
+        more.remove();
+        follow();
+      });
+      more.append(link);
+      list.insertBefore(more, list.firstChild);
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "steps";
+    button.textContent = inWords(t.steps) + " · " + (total / 1000).toFixed(1) + "s";
+    button.addEventListener("click", () => {
+      list.hidden = !list.hidden;
+      follow();
+    });
+    t.el.append(button, list);
+  } else {
+    const took = document.createElement("p");
+    took.className = "took";
+    took.textContent = (total / 1000).toFixed(1) + "s";
+    t.el.append(took);
+  }
 
   open = null;
-  turnsEl.textContent = ++turns;
-  if (!speakingNow) setState("idle", "listening");
+  if (!speakingNow) setState("idle", "with you");
   follow();
 }
 
-function unprompted(said) {
-  begun();
+/** She started this one. It should reach him without behaving like a website. */
+function unbidden(said) {
   recede();
-  ripple(true);
-  const box = document.createElement("aside");
-  box.className = "unprompted";
+  const el = turnEl("unbidden");
+  const when = document.createElement("span");
+  when.className = "when";
   const now = new Date();
-  box.innerHTML =
-    '<span class="tag">she started this · ' +
-    String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") + "</span>";
+  when.textContent = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
   const p = document.createElement("p");
+  p.className = "her";
   p.textContent = said;
-  box.append(p);
-  log.append(box);
-  animate(box, { opacity: [0, 1], translateX: [-12, 0], duration: 540, ease: "outCubic" });
+  el.append(when, p);
+  animate(el, { opacity: [0, 1], translateX: [-10, 0], duration: 520, ease: "outCubic" });
+  ripple(true);
   if (speaking) enqueue(said);
+  if (phone() && document.body.dataset.memory === "on") memory(false);
   follow();
 }
 
-function wrong(message) {
-  begun();
-  const box = document.createElement("div");
-  box.className = "wrong";
-  box.textContent = message;
-  log.append(box);
-  enter(box);
+function hitch(message) {
+  const el = turnEl();
+  const p = document.createElement("p");
+  p.className = "hitch";
+  p.textContent = message;
+  el.append(p);
+  enter(el);
   follow();
 }
 
@@ -708,47 +1113,39 @@ function wrong(message) {
    else — the master token never enters a page she wrote. Anything inside can
    call parent.postMessage({ vela: "..." }, "*") and it reaches her as words.
    ════════════════════════════════════════════════════════════════════════ */
-let screenUp = null;
-
-function stageOpen() {
-  stage.hidden = false;
-  chip.hidden = true;
-  document.body.dataset.screen = "on";
-  animate(stage, { opacity: [0, 1], translateX: [26, 0], duration: 520, ease: "outCubic" });
-}
-
-/* His gesture only. What she is showing stays shown, one word away. */
-function stageAway() {
-  stage.hidden = true;
-  delete document.body.dataset.screen;
-  chip.hidden = !screenUp;
-}
-
 function showScreen(meta, quiet) {
   screenUp = meta || null;
   if (!screenUp) {
     stageFrame.removeAttribute("src");
-    stageAway();
+    document.body.removeAttribute("data-stage");
+    chip.hidden = true;
+    stageHidden = false;
+    posture();
     return;
   }
   stageTitle.textContent = screenUp.title;
   stageNote.textContent = screenUp.note || "";
-  chip.textContent = "screen · " + screenUp.title;
+  chip.textContent = screenUp.title;
   stageFrame.src = "/screen/file?s=" + encodeURIComponent(screenUp.s || "");
-  stageOpen();
-  if (!quiet) {
-    begun();
-    const p = document.createElement("p");
-    p.className = "put";
-    p.textContent = "on the screen · " + screenUp.title;
-    log.append(p);
-    enter(p, 4);
-    follow();
-  }
+  stageHidden = false;
+  chip.hidden = true;
+  document.body.dataset.stage = "on";
+  if (phone()) memory(false);
+  posture();
+  animate(stage, { opacity: [0, 1], duration: 460, ease: "outCubic" });
+  if (!quiet) follow();
 }
 
-stageShut.addEventListener("click", () => stageAway());
-chip.addEventListener("click", () => stageOpen());
+/* His gesture only. What she is showing stays shown, one word away. */
+function stageAway() {
+  stageHidden = true;
+  document.body.removeAttribute("data-stage");
+  chip.hidden = !screenUp;
+  posture();
+}
+
+stageShut.addEventListener("click", stageAway);
+chip.addEventListener("click", () => { if (screenUp) showScreen(screenUp, true); });
 
 /* What he does on her page comes back as words. Only from the stage's own
    window, only a string, and never more than a sentence's worth. */
@@ -756,13 +1153,7 @@ addEventListener("message", (e) => {
   if (!screenUp || !stageFrame.contentWindow || e.source !== stageFrame.contentWindow) return;
   const said = e.data && typeof e.data.vela === "string" ? e.data.vela.trim().slice(0, 500) : "";
   if (!said) return;
-  begun();
-  const p = document.createElement("p");
-  p.className = "ask fromscreen";
-  p.textContent = said;
-  log.append(p);
-  enter(p);
-  follow();
+  yours(said, true);
   deliver("[He did this on the screen: " + said + "]");
 });
 
@@ -813,27 +1204,30 @@ function gapAfter(said, base) {
    carries character offsets because the reading head sweeps by range. */
 const CLAUSE_MIN_WORDS = 3, CLAUSE_MIN_CHARS = 70;
 function countWords(s) { return s.trim().split(/\s+/).filter(Boolean).length; }
-function clausesOf(text, from) {
-  if (text.trim().length < CLAUSE_MIN_CHARS || text.includes("```")) {
-    return [[text, from, from + text.length]];
+function clausesOf(body, from) {
+  if (body.trim().length < CLAUSE_MIN_CHARS || body.includes("```")) {
+    return [[body, from, from + body.length]];
   }
   const out = [];
   let at = 0;
   for (;;) {
-    const cut = /[,;:]\s/.exec(text.slice(at));
+    const cut = /[,;:]\s/.exec(body.slice(at));
     if (!cut) break;
     const end = at + cut.index + 1;
-    const head = text.slice(at, end), tail = text.slice(end + cut[0].length - 1);
+    const head = body.slice(at, end), tail = body.slice(end + cut[0].length - 1);
     if (countWords(head) < CLAUSE_MIN_WORDS || countWords(tail) < CLAUSE_MIN_WORDS) break;
     out.push([head, from + at, from + end]);
     at = end + cut[0].length - 1;
   }
-  if (at < text.length) out.push([text.slice(at), from + at, from + text.length]);
-  return out.length ? out : [[text, from, from + text.length]];
+  if (at < body.length) out.push([body.slice(at), from + at, from + body.length]);
+  return out.length ? out : [[body, from, from + body.length]];
 }
 
 async function enqueue(sentence, range) {
-  const said = sentence.trim();
+  // What reaches Kokoro is the spoken form, so she never reads a backtick or
+  // a URL out loud. The range stays in the coordinates of what is on screen,
+  // which is what the reading head sweeps across.
+  const said = forSaying(sentence).trim();
   if (!said || !canSpeak || !speaking) return;
   audioQueue.push({ said, range: range || null, spans: (open && open.spans) || null });
   if (!playing) drainAudio();
@@ -886,17 +1280,13 @@ async function drainAudio() {
     if (!first) await new Promise((r) => setTimeout(r, gapAfter(said, 150)));
     first = false;
     try {
-      const res = await fetch("/speak", {
-        method: "POST",
-        headers: Object.assign({ "content-type": "application/json" }, auth),
-        body: JSON.stringify({ text: said }),
-      });
+      const res = await fetch("/speak", { method: "POST", headers: json, body: JSON.stringify({ text: said }) });
       if (!res.ok) continue;
       const url = URL.createObjectURL(await res.blob());
       await new Promise((finish) => {
         const a = new Audio(url);
         current = a;
-        // A core that does not move is a small loss. A voice that does not
+        // A field that does not move is a small loss. A voice that does not
         // play is the whole feature, so the tap is optional and playback is not.
         const ctx = liveEars();
         if (ctx) {
@@ -908,6 +1298,7 @@ async function drainAudio() {
             an.connect(ctx.destination);
             analyser = an;
             ampData = new Uint8Array(an.frequencyBinCount);
+            wake();
           } catch { analyser = null; }
         }
         speakingNow = true;
@@ -922,7 +1313,7 @@ async function drainAudio() {
   playing = false;
   speakingNow = false;
   analyser = null;
-  if (!open) setState("idle", "listening");
+  if (!open) setState("idle", "with you");
 }
 
 /** Stop mid-sentence. Called when he talks over her. */
@@ -959,15 +1350,11 @@ function speakRest(t) {
 }
 
 /* "She is about to need this." Her speech models are held back until first
-   use, so an idle Vela is ~460MB rather than 1.5GB. Saying so at the gesture
+   use, so an idle Vela is ~430MB rather than 1.5GB. Saying so at the gesture
    rather than at the sentence is what keeps that free: the load happens while
    he is still talking, or still reading. */
 function warm(what) {
-  fetch("/warm", {
-    method: "POST",
-    headers: Object.assign({ "content-type": "application/json" }, auth),
-    body: JSON.stringify({ what: what }),
-  }).catch(() => {});
+  fetch("/warm", { method: "POST", headers: json, body: JSON.stringify({ what: what }) }).catch(() => {});
 }
 
 earKey.addEventListener("click", () => {
@@ -977,7 +1364,6 @@ earKey.addEventListener("click", () => {
   // will let the page make noise.
   if (speaking) { ears(); warm("voice"); }
   else hush();
-  animate(earKey, { scale: [0.84, 1], duration: 320, ease: "outBack" });
 });
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1002,7 +1388,7 @@ async function startListening() {
     recorder.start();
 
     // Nothing is routed through the context here, so a suspended one costs the
-    // animation and never the recording.
+    // drawing and never the recording.
     const ctx = liveEars();
     if (ctx) {
       try {
@@ -1011,14 +1397,14 @@ async function startListening() {
         ctx.createMediaStreamSource(micStream).connect(an);
         analyser = an;
         ampData = new Uint8Array(an.frequencyBinCount);
+        wake();
       } catch { analyser = null; }
     }
 
     micKey.classList.add("hot");
-    hintEl.textContent = "Listening · press again when you are done";
     setState("listening", "listening");
   } catch {
-    wrong("The browser would not open the microphone. Check its permission for this page.");
+    hitch("The browser would not open the microphone. Check its permission for this page.");
   }
 }
 
@@ -1027,62 +1413,93 @@ async function onHeard() {
   micStream = null;
   analyser = null;
   micKey.classList.remove("hot");
-  setState("thinking", "making it out");
-  hintEl.textContent = "Working out what you said";
+  setState("working", "hearing");
   try {
     const res = await fetch("/hear", { method: "POST", headers: auth, body: new Blob(chunks) });
     const { text: heard } = await res.json();
-    hintEl.textContent = "Enter sends · Shift and Enter for a new line";
     if (heard && heard.trim()) say(heard.trim());
-    else { setState("idle", "listening"); wrong("Nothing came through on that one."); }
+    else { setState("idle", "with you"); hitch("Nothing came through on that one."); }
   } catch {
-    hintEl.textContent = "Enter sends · Shift and Enter for a new line";
-    setState("idle", "listening");
-    wrong("Could not send that recording.");
+    setState("idle", "with you");
+    hitch("Could not send that recording.");
   }
 }
 
 micKey.addEventListener("click", () => {
   if (recorder && recorder.state === "recording") recorder.stop();
   else startListening();
-  animate(micKey, { scale: [0.84, 1], duration: 320, ease: "outBack" });
 });
 
 /* ════════════════════════════════════════════════════════════════════════
    The wire
    ════════════════════════════════════════════════════════════════════════ */
+/**
+ * A turn that will never finish, closed out honestly.
+ *
+ * The stream is the only way a turn ends, so if it drops while she is
+ * answering, the result lands in a socket nobody is holding and the page waits
+ * for ever: caret blinking, tool line stuck in the rail, no reply coming. Left
+ * alone it looks exactly like her thinking, which is the worst thing it could
+ * look like. Whatever words did arrive are kept — they were really said.
+ */
+function abandon(why) {
+  const t = open;
+  if (!t) return;
+  renderWords(t, true);
+  t.caret.remove();
+  doing("");
+  const note = document.createElement("p");
+  note.className = "took";
+  note.textContent = why;
+  t.el.append(note);
+  open = null;
+  setState("idle", "with you");
+  follow();
+}
+
 function listen() {
   const events = new EventSource("/events?k=" + encodeURIComponent(KEY));
-  events.onopen = () => setState("idle", "listening");
+  let dropped = false;
+  events.onopen = () => {
+    // Back after a drop. Anything she was saying went with it, and a service
+    // that restarted is a different session from the one this page was
+    // talking to, so the turn is not coming back either way.
+    if (dropped) abandon(open ? "lost her mid-answer, the connection dropped" : "");
+    dropped = false;
+    if (!open && !speakingNow) setState("idle", "with you");
+  };
   events.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
     if (ev.type === "activity") tool(ev.lines || []);
     else if (ev.type === "delta") delta(ev.text || "");
     else if (ev.type === "result") done(ev.ms, ev.text);
-    else if (ev.type === "say") unprompted(ev.text || "");
+    else if (ev.type === "say") unbidden(ev.text || "");
     else if (ev.type === "show") showScreen(ev.screen);
-    else if (ev.type === "error") { wrong(ev.message || "Something went wrong."); open = null; setState("idle", "listening"); }
+    else if (ev.type === "error") { hitch(ev.message || "Something went wrong."); open = null; doing(""); setState("idle", "with you"); }
   };
   // It reconnects itself. Say so, because silence is also what working looks like.
-  events.onerror = () => setState("lost", "reconnecting");
+  events.onerror = () => {
+    dropped = true;
+    setState("lost", "reaching");
+  };
 }
 
-/* Hand her a turn. The transcript entry is the caller's business, because a
-   typed line and a click on the stage read differently on the page. */
+/* Hand her a turn. The line on screen is the caller's business, because a
+   typed line and a click on the stage read differently. */
 async function deliver(said, interrupted) {
   try {
     const res = await fetch("/turn", {
       method: "POST",
-      headers: Object.assign({ "content-type": "application/json" }, auth),
+      headers: json,
       body: JSON.stringify({ text: said, cutOff: Boolean(interrupted) }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      wrong("She did not take that: " + (body.error || res.status));
+      hitch("She did not take that: " + (body.error || res.status));
     }
   } catch {
-    wrong("Could not reach her. The service may have stopped.");
+    hitch("Could not reach her. The service may have stopped.");
     setState("lost", "offline");
   }
 }
@@ -1094,45 +1511,112 @@ async function say(said) {
   return deliver(said, interrupted);
 }
 
-const grow = () => { text.style.height = "auto"; text.style.height = Math.min(text.scrollHeight, innerHeight * 0.28) + "px"; };
-text.addEventListener("input", grow);
+/* ════════════════════════════════════════════════════════════════════════
+   The way in
+
+   Dormant until he means to type. Typing anywhere wakes it, so the keyboard
+   is the shortcut and there is nothing to learn; it collapses again once he
+   is done, rather than holding the bottom of the room open all day.
+   ════════════════════════════════════════════════════════════════════════ */
+const typing = () => {
+  const on = document.activeElement === text || text.value.length > 0;
+  if (on) document.body.dataset.typing = "on";
+  else document.body.removeAttribute("data-typing");
+};
+const grow = () => {
+  text.style.height = "auto";
+  text.style.height = Math.min(text.scrollHeight, innerHeight * 0.24) + "px";
+};
+
+text.addEventListener("input", () => { grow(); typing(); });
+text.addEventListener("focus", typing);
+text.addEventListener("blur", typing);
 text.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); dock.requestSubmit(); }
+  if (e.key === "Escape") text.blur();
 });
-form.addEventListener("submit", (e) => {
+
+dock.addEventListener("submit", (e) => {
   e.preventDefault();
   const said = text.value.trim();
   if (!said) return;
   if (speakingNow || audioQueue.length) { hush(); cutOff = true; } // typing over her counts too
   text.value = "";
   grow();
+  typing();
   say(said);
 });
+
+addEventListener("keydown", (e) => {
+  const el = document.activeElement;
+  if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // A printable key means he has started talking to her. "/" is the same
+  // intent said deliberately, and never lands in the box itself.
+  if (e.key === "/") { e.preventDefault(); text.focus(); return; }
+  if (e.key.length === 1) text.focus();
+});
+
+/* Memory, on a phone, is pulled up rather than left open. */
+function memory(on) {
+  if (on === undefined) on = document.body.dataset.memory !== "on";
+  if (on) document.body.dataset.memory = "on";
+  else document.body.removeAttribute("data-memory");
+  pull.textContent = on ? "close" : "memory";
+  if (on) follow();
+}
+pull.addEventListener("click", () => memory());
+
+/* The developer half, one keystroke away and absent otherwise. She does not
+   print her own pid at him all day to prove she is running. */
+let probing = false;
+addEventListener("keydown", (e) => {
+  const el = document.activeElement;
+  if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return;
+  if (e.key !== "`") return;
+  probing = !probing;
+  probe.hidden = !probing;
+});
+
+/* On a phone the software keyboard steals half the room. Track the real
+   visible viewport so the dock stays where his thumb left it. */
+if (window.visualViewport) {
+  const fit = () => {
+    const gap = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop);
+    document.documentElement.style.setProperty("--safe-b", gap ? gap + "px" : "env(safe-area-inset-bottom, 0px)");
+  };
+  visualViewport.addEventListener("resize", fit);
+  visualViewport.addEventListener("scroll", fit);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Coming up
+   ════════════════════════════════════════════════════════════════════════ */
 
 /* No key, or one she no longer accepts. Say which, and say where the real one
    lives — a page that just sits there dead is the worst of the three. */
 function locked(why) {
   try { localStorage.removeItem(STORE); } catch { /* nothing to forget */ }
   setState("lost", "locked");
-  opening.innerHTML =
-    "<h2>She does not know <em>you</em> yet.</h2>" +
-    "<p>" + why + " Her link, with the key on the end of it, is printed by " +
-    "<code>npm run serve</code> and kept in <code>data/server.json</code>. " +
-    "Open it once and this tab remembers it.</p>";
-  form.hidden = true;
+  lockedEl.hidden = false;
+  lockedEl.innerHTML =
+    "<b>She does not know this tab.</b>" + why +
+    " Her link, with the key on the end of it, is printed by <code>npm run serve</code>" +
+    " and kept in <code>data/server.json</code>. Open it once and this tab remembers.";
+  dock.hidden = true;
 }
 
 if (!KEY) {
-  locked("This tab has no key.");
+  locked("");
 } else {
   fetch("/health", { headers: auth })
     .then((r) => {
-      if (r.status === 401) { locked("The key this tab remembered is not hers any more."); return null; }
+      if (r.status === 401) { locked(" The key it had is not hers any more."); return null; }
       return r.json();
     })
     .then((h) => {
       if (!h) return;
-      buildEl.textContent = "pid " + h.pid;
+      probe.textContent = h.name.toLowerCase() + " · pid " + h.pid;
       canHear = Boolean(h.canHear);
       canSpeak = Boolean(h.canSpeak);
       // A control that cannot work is worse than no control.
@@ -1140,31 +1624,24 @@ if (!KEY) {
       earKey.hidden = !canSpeak;
     })
     .catch(() => {});
-}
 
-/* Whatever she had up survives a reload. Quiet, because the stage opening
-   again is not news. */
-if (KEY) {
+  /* Whatever she had up survives a reload. Quiet, because the stage opening
+     again is not news. */
   fetch("/screen", { headers: auth })
     .then((r) => (r.ok ? r.json() : { screen: null }))
     .then(({ screen }) => { if (screen) showScreen(screen, true); })
     .catch(() => {});
+
+  listen();
 }
 
-/* She comes up rather than appearing. One sequence, once, on load. */
+// She is here before the page is, so it settles in rather than performing an
+// arrival. One sequence, once.
 if (A && !still) {
-  A.createTimeline({ defaults: { ease: "outCubic" } })
-    .add(core, { opacity: [0, 0.78], scale: [0.9, 1], duration: 1100 })
-    .add(".wordmark", { opacity: [0, 1], translateY: [8, 0], duration: 500 }, "-=760")
-    .add(".mode", { opacity: [0, 1], duration: 420 }, "-=320")
-    .add(".meta span", { opacity: [0, 1], duration: 380, delay: A.stagger(80) }, "-=280")
-    .add(".opening", { opacity: [0, 1], translateY: [14, 0], duration: 620 }, "-=420")
-    .add(".dock", { opacity: [0, 1], duration: 480 }, "-=460");
+  A.animate(canvas, { opacity: [0, 1], duration: 900, ease: "outCubic" });
+  A.animate(".rail > *", { opacity: [0, 1], duration: 500, delay: A.stagger(70), ease: "outCubic" });
+  A.animate(".dock", { opacity: [0, 1], duration: 500, delay: 260, ease: "outCubic" });
 }
-
-// Without a key there is nothing to listen to, and an EventSource that
-// retries a 401 for ever is a worse silence than an honest one.
-if (KEY) listen();
 </script>
 </body>
 </html>
