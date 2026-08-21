@@ -44,11 +44,38 @@ export interface ServeOptions {
   /** Where to advertise the endpoint. Tests point this somewhere disposable. */
   endpointFile?: string;
   name?: string;
+  /**
+   * Turn what a browser recorded into words. Absent means the hub's microphone
+   * button is not offered rather than offered and broken.
+   */
+  hear?: (audio: Buffer) => Promise<string>;
+  /** Turn her words into a wav the browser can play. Absent means a mute hub. */
+  render?: (text: string) => Promise<Buffer | null>;
 }
 
 export interface RunningServer {
   endpoint: Endpoint;
   close: () => Promise<void>;
+}
+
+/**
+ * What she is told when he talks over her.
+ *
+ * Phrased as an observation rather than a telling-off, because the useful
+ * response is a shorter next answer, not an apology for the last one.
+ */
+export const CUT_OFF =
+  "[He interrupted you to say this, so he had heard enough. That last reply " +
+  "was longer than it needed to be. Answer this one in one sentence.]";
+
+/** Read a whole request body. Audio is bytes, so this never assumes utf8. */
+function collect(
+  req: { on: (event: string, fn: (chunk?: Buffer) => void) => void },
+  done: (body: Buffer) => void,
+) {
+  const chunks: Buffer[] = [];
+  req.on("data", (chunk) => chunk && chunks.push(Buffer.from(chunk)));
+  req.on("end", () => done(Buffer.concat(chunks)));
 }
 
 export function serve(opts: ServeOptions): Promise<RunningServer> {
@@ -57,25 +84,140 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
   const name = opts.name ?? "Vela";
   const clients = new Set<{ write: (chunk: string) => void }>();
 
-  const authed = (auth: string | undefined) => auth === `Bearer ${token}`;
+  /**
+   * The token, from either door.
+   *
+   * A browser can set a header on fetch but not on a plain navigation, and
+   * EventSource cannot set one at all, so the hub could not exist on the
+   * header alone. `?k=` is the second door. The page strips it out of the
+   * address bar as its first act, so it stops being in the history the moment
+   * it has been read.
+   */
+  const authed = (req: { headers: { authorization?: string }; url?: string }) => {
+    if (req.headers.authorization === `Bearer ${token}`) return true;
+    const key = new URL(req.url ?? "/", "http://127.0.0.1").searchParams.get("k");
+    return key === token;
+  };
 
   const server: Server = createServer((req, res) => {
-    const url = req.url ?? "/";
+    const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
 
-    if (!authed(req.headers.authorization)) {
+    if (!authed(req)) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "bad or missing token" }));
       return;
     }
 
-    if (req.method === "GET" && url === "/health") {
+    // Her second face. One file, no build step, no request to anywhere else.
+    if (req.method === "GET" && (path === "/" || path === "/hub")) {
+      try {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(readFileSync(resolve(here, "hub.html"), "utf8"));
+      } catch {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "hub.html is missing" }));
+      }
+      return;
+    }
+
+    // Vendored rather than fetched from a CDN: she works with the network
+    // down, and her own face should not be the thing that stops.
+    if (req.method === "GET" && path === "/anime.js") {
+      try {
+        const bundle = resolve(here, "../node_modules/animejs/dist/bundles/anime.umd.min.js");
+        res.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "max-age=86400",
+        });
+        res.end(readFileSync(bundle));
+      } catch {
+        // The page checks for it and falls back to no motion rather than
+        // throwing on every animate() call.
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "anime.js is not installed" }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && path === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ name, busy: opts.core.isBusy(), pid: process.pid }));
+      res.end(
+        JSON.stringify({
+          name,
+          busy: opts.core.isBusy(),
+          pid: process.pid,
+          // The hub asks before drawing a microphone or a speaker, so a
+          // service without them shows a smaller face rather than a broken one.
+          canHear: Boolean(opts.hear),
+          canSpeak: Boolean(opts.render),
+        }),
+      );
+      return;
+    }
+
+    // What he just said into the browser, as words.
+    if (req.method === "POST" && path === "/hear") {
+      if (!opts.hear) {
+        res.writeHead(501, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "this service has no ears" }));
+        return;
+      }
+      collect(req, (audio) => {
+        opts
+          .hear!(audio)
+          .then((text) => {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ text }));
+          })
+          .catch(() => {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "could not transcribe that" }));
+          });
+      });
+      return;
+    }
+
+    // A sentence of hers, as audio. One sentence per request, because the hub
+    // asks as they stream rather than waiting for the whole reply.
+    if (req.method === "POST" && path === "/speak") {
+      if (!opts.render) {
+        res.writeHead(501, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "this service has no voice" }));
+        return;
+      }
+      collect(req, (body) => {
+        let text = "";
+        try {
+          text = (JSON.parse(body.toString("utf8") || "{}") as { text?: string }).text ?? "";
+        } catch {
+          /* handled as empty below */
+        }
+        if (!text.trim()) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "text is required" }));
+          return;
+        }
+        opts
+          .render!(text)
+          .then((wav) => {
+            if (!wav?.length) {
+              res.writeHead(500, { "content-type": "application/json" });
+              res.end(JSON.stringify({ error: "nothing was synthesised" }));
+              return;
+            }
+            res.writeHead(200, { "content-type": "audio/wav", "content-length": wav.length });
+            res.end(wav);
+          })
+          .catch(() => {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "could not synthesise that" }));
+          });
+      });
       return;
     }
 
     // Everything the core does, as it happens.
-    if (req.method === "GET" && url === "/events") {
+    if (req.method === "GET" && path === "/events") {
       res.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
@@ -88,18 +230,24 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
       return;
     }
 
-    if (req.method === "POST" && url === "/turn") {
-      let body = "";
-      req.on("data", (chunk) => (body += chunk));
-      req.on("end", () => {
+    if (req.method === "POST" && path === "/turn") {
+      collect(req, (raw) => {
         try {
-          const { text } = JSON.parse(body || "{}") as { text?: string };
+          const { text, cutOff } = JSON.parse(raw.toString("utf8") || "{}") as {
+            text?: string;
+            cutOff?: boolean;
+          };
           if (!text?.trim()) {
             res.writeHead(400, { "content-type": "application/json" });
             res.end(JSON.stringify({ error: "text is required" }));
             return;
           }
-          opts.core.send(text);
+          // Talking over her is the clearest feedback there is, and it is
+          // wasted if she never learns it happened. She hears that she was cut
+          // off, in the same turn, so the next reply is shorter.
+          opts.core.send(cutOff ? `${CUT_OFF}
+
+${text}` : text);
           res.writeHead(202, { "content-type": "application/json" });
           res.end(JSON.stringify({ accepted: true }));
         } catch {

@@ -446,3 +446,40 @@ export async function transcribe(wav: string, opts: ListenOptions = {}): Promise
   if (!existsSync(txt)) return "";
   return cleanTranscript(readFileSync(txt, "utf8"));
 }
+
+/**
+ * Whatever the browser recorded, as the samples whisper wants.
+ *
+ * MediaRecorder hands back webm/opus, and the warm worker takes raw 16 kHz
+ * mono. ffmpeg is already a dependency for capture, so it does the conversion
+ * rather than pulling in a decoder.
+ */
+export function pcmFromAudio(
+  audio: Buffer,
+  opts: { ffmpeg?: string; spawn?: Spawner } = {},
+): Promise<Buffer> {
+  const run = opts.spawn ?? realSpawn;
+  return new Promise((fulfil) => {
+    const ff = run(
+      opts.ffmpeg ?? "ffmpeg",
+      [
+        "-loglevel", "quiet",
+        "-i", "pipe:0",
+        "-f", "s16le",
+        "-ar", String(SAMPLE_RATE),
+        "-ac", "1",
+        "pipe:1",
+      ],
+      { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] },
+    );
+
+    const chunks: Buffer[] = [];
+    ff.stdout?.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+    // A conversion that fails is silence, which the caller reports as "didn't
+    // catch that" rather than as a stack trace in the browser.
+    ff.on("error", () => fulfil(Buffer.alloc(0)));
+    ff.on("close", () => fulfil(Buffer.concat(chunks)));
+    ff.stdin?.on("error", () => {});
+    ff.stdin?.end(audio);
+  });
+}

@@ -7,6 +7,7 @@ import {
   discoverSkills,
   parseSkillList,
   excludeSkills,
+  switchedOn,
   claudeBinaryDir,
   ensureClaudeOnPath,
 } from "../src/config.js";
@@ -191,5 +192,33 @@ suite("the heartbeat's list", () => {
       ["agent-reach"],
       "a skill that isn't on this machine must not reach the tick",
     );
+  });
+});
+
+suite("switchedOn", () => {
+  test("unset leaves the default alone, whichever way it points", () => {
+    assert.equal(switchedOn(undefined, true), true);
+    assert.equal(switchedOn(undefined, false), false);
+  });
+
+  test("takes the word off, which is how he asks for a quiet session", () => {
+    assert.equal(switchedOn("off", true), false);
+    assert.equal(switchedOn("OFF", true), false);
+    assert.equal(switchedOn(" off ", true), false);
+  });
+
+  test("takes the word on", () => {
+    assert.equal(switchedOn("on", false), true);
+    assert.equal(switchedOn("On", false), true);
+  });
+
+  test("the words people reach for instead also work", () => {
+    for (const yes of ["true", "1", "yes"]) assert.equal(switchedOn(yes, false), true, yes);
+    for (const no of ["false", "0", "no"]) assert.equal(switchedOn(no, true), false, no);
+  });
+
+  test("a typo keeps the default rather than silently taking her voice", () => {
+    assert.equal(switchedOn("onn", true), true);
+    assert.equal(switchedOn("", true), true);
   });
 });

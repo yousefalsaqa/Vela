@@ -49,6 +49,7 @@ import {
   EDGE_TTS,
   KOKORO_VOICE,
   KOKORO_SPEED,
+  VOICE_GAP_MS,
   KOKORO_PYTHON,
   KOKORO_WORKER,
   LISTEN_ON,
@@ -144,6 +145,7 @@ async function main() {
           worker: KOKORO_WORKER,
           voice: KOKORO_VOICE,
           speed: KOKORO_SPEED,
+          gapMs: VOICE_GAP_MS,
           play: resolveFfplay() ?? "ffplay",
           onSpoke: startedTalking,
           onProblem: (why) =>

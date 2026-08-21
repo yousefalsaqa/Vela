@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   speakable,
   sentences,
+  clauses,
   createVoice,
   pcmFromWav,
   pcmPlayer,
@@ -13,6 +14,8 @@ import {
   neuralSpeaker,
   windowsSpeaker,
   PRONOUNCE_PHONEMES,
+  silence,
+  gapFor,
 } from "../src/voice.js";
 import { wavFromPcm } from "../src/listen.js";
 import { fakeSpawner, respondToRequests, settle } from "./helpers/proc.js";
@@ -686,5 +689,212 @@ describe("createVoice", () => {
     voice.flush();
     voice.flush();
     assert.deepEqual(spoken, ["Done"]);
+  });
+});
+
+describe("the opening clause", () => {
+  test("breaks a long opener at its first comma, so he hears something sooner", () => {
+    const { ready, rest } = sentences("Some of that is not me, it is the pipe and ", false, true);
+    assert.deepEqual(ready, ["Some of that is not me,"]);
+    assert.equal(rest, "it is the pipe and ");
+  });
+
+  test("leaves a stub alone, because three words have no run-up", () => {
+    assert.deepEqual(sentences("No, ", false, true).ready, []);
+  });
+
+  test("a whole sentence still wins over the clause inside it", () => {
+    assert.deepEqual(sentences("Loud and clear. ", false, true).ready, ["Loud and clear."]);
+  });
+
+  test("never cuts inside a code fence", () => {
+    assert.deepEqual(sentences("```ts\nconst a = 1, b = 2;\n", false, true).ready, []);
+  });
+
+  test("does nothing once she is already talking", () => {
+    assert.deepEqual(sentences("Some of that is not me, it is the pipe and ", false, false).ready, []);
+  });
+
+  test("only the first piece of a turn is eager", () => {
+    const said: string[] = [];
+    const voice = createVoice((t) => said.push(t), []);
+    voice.push("Some of that is not me, it is the pipe and ");
+    assert.deepEqual(said, ["Some of that is not me,"], "the opener breaks early");
+    voice.push("the pipe does not care, it just renders and ");
+    assert.deepEqual(said, ["Some of that is not me,"], "the rest waits for a full stop");
+  });
+
+  test("a new turn opens from silence and is eager again", () => {
+    const said: string[] = [];
+    const voice = createVoice((t) => said.push(t), []);
+    voice.push("Some of that is not me, it is the pipe.");
+    voice.flush();
+    said.length = 0;
+    voice.push("Another long opening line here, and then some more ");
+    assert.deepEqual(said, ["Another long opening line here,"]);
+  });
+});
+
+describe("clauses inside a sentence", () => {
+  // A long sentence went to Kokoro whole, so the only pauses in a reply were
+  // the ones between full stops. Three clauses came out as one unbroken run,
+  // which is what "it sounds like one long sentence" actually was.
+  test("splits a long sentence at its commas, so each clause gets its own beat", () => {
+    const { ready, rest } = sentences(
+      "Is it the gaps between the sentences, or is it inside the sentences, the way it renders the words? ",
+    );
+    assert.deepEqual(ready, [
+      "Is it the gaps between the sentences,",
+      "or is it inside the sentences,",
+      "the way it renders the words?",
+    ]);
+    assert.equal(rest, "");
+  });
+
+  test("leaves a short sentence in one piece", () => {
+    // Two clauses of four words are a phrase, not a list. Cutting here would
+    // put a hole in the middle of something a person says in one breath.
+    assert.deepEqual(sentences("Renamed it, tests pass. ").ready, ["Renamed it, tests pass."]);
+  });
+
+  test("does not cut a clause too short to stand on its own", () => {
+    const { ready } = sentences(
+      "No, the whole point of this is that it should not chop the first two words off. ",
+    );
+    assert.ok(
+      ready.every((piece) => piece.split(/\s+/).length >= 3),
+      "a two-word fragment is a stutter, not a clause",
+    );
+  });
+
+  test("never cuts inside a code fence", () => {
+    const fenced = "```ts\nconst a = 1, b = 2, c = 3, d = 4, e = 5, f = 6;\n```\n\n";
+    assert.deepEqual(sentences(fenced).ready, [fenced.trim()]);
+  });
+
+  test("a decimal inside a long sentence is not a clause boundary", () => {
+    const { ready } = sentences(
+      "The whole suite finished in 1.4 seconds on this machine, which is faster than it was. ",
+    );
+    assert.ok(
+      ready.every((piece) => !/\d\.$/.test(piece)),
+      "cutting at a decimal point reads the number wrong",
+    );
+  });
+
+  test("a long fenced block keeps its commas, because those are code", () => {
+    // Long enough to pass the length guard, so this reaches the fence check
+    // rather than being spared by being short.
+    const fenced = "```ts\nconst a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = 8;\n```";
+    assert.deepEqual(clauses(fenced), [fenced]);
+  });
+
+  test("returns the sentence whole when no cut is worth making", () => {
+    // Long, and every comma has a stub on one side of it. Splitting on any of
+    // them would put a pause inside a phrase.
+    const awkward = "The build finished and everything about it passed cleanly, ok, yes.";
+    assert.deepEqual(clauses(awkward), [awkward]);
+  });
+
+  test("flush splits the trailing fragment too", () => {
+    const { ready } = sentences(
+      "I think it probably turns out that you are right about this, and the fix is small",
+      true,
+    );
+    assert.ok(ready.length > 1, "the last sentence of a turn is usually the longest");
+  });
+});
+
+describe("the beat between sentences", () => {
+  const GAP_BYTES = Math.round(24_000 * 0.15) * 2;
+
+  test("silence is two bytes a sample, even in length, and actually silent", () => {
+    assert.equal(silence(150, 24_000).length, GAP_BYTES);
+    assert.equal(silence(150).length % 2, 0);
+    assert.deepEqual(silence(150).subarray(0, 8), Buffer.alloc(8));
+  });
+
+  test("no beat before her first sentence, which is the one he is waiting on", () => {
+    const fake = fakeSpawner();
+    pcmPlayer({ gapMs: 150, spawn: fake.spawn }).write(Buffer.alloc(100, 7));
+    assert.equal(fake.last().proc.written.length, 100);
+  });
+
+  test("a beat before every sentence after it", () => {
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ gapMs: 150, sampleRate: 24_000, spawn: fake.spawn });
+    player.write(Buffer.alloc(100, 7));
+    player.write(Buffer.alloc(200, 7));
+
+    const out = fake.last().proc.written;
+    assert.equal(out.length, 100 + GAP_BYTES + 200);
+    assert.deepEqual(
+      out.subarray(100, 100 + GAP_BYTES),
+      Buffer.alloc(GAP_BYTES),
+      "the beat has to be silence, not more speech",
+    );
+  });
+
+  test("zero leaves them flush against each other, as they were", () => {
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ gapMs: 0, spawn: fake.spawn });
+    player.write(Buffer.alloc(100, 7));
+    player.write(Buffer.alloc(200, 7));
+    assert.equal(fake.last().proc.written.length, 300);
+  });
+
+  test("a new turn starts a new player, so it opens with no beat again", () => {
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ gapMs: 150, spawn: fake.spawn });
+    player.write(Buffer.alloc(100, 7));
+    player.write(Buffer.alloc(100, 7));
+    void player.drain(10);
+    player.write(Buffer.alloc(100, 7));
+    assert.equal(fake.spawned.length, 2, "the drained player has already ended");
+    assert.equal(fake.last().proc.written.length, 100, "and the new one opens clean");
+  });
+});
+
+describe("gapFor", () => {
+  test("a clause is barely a beat, a full stop is a real one", () => {
+    assert.ok(
+      gapFor("Two things bother me,") < gapFor("Two things bother me."),
+      "running a comma as long as a full stop is what made it sound read out",
+    );
+  });
+
+  test("a question hangs longer than a statement", () => {
+    assert.ok(gapFor("Are you there?") > gapFor("You are there."));
+  });
+
+  test("a paragraph is a proper stop", () => {
+    assert.ok(gapFor("Done.\n\n") > gapFor("Done."));
+  });
+
+  test("the same sentence always pauses the same way", () => {
+    // Otherwise a replayed reply shimmers differently every time.
+    assert.equal(gapFor("Loud and clear."), gapFor("Loud and clear."));
+  });
+
+  test("different sentences do not all land on the same number", () => {
+    const spread = new Set(
+      ["Right.", "Done.", "Not quite.", "Fine.", "It passed."].map((s) => gapFor(s)),
+    );
+    assert.ok(spread.size > 1, "an even pause is as much a tell as an even sentence length");
+  });
+
+  test("scales with the base, so VELA_VOICE_GAP still means something", () => {
+    assert.ok(gapFor("Done.", 300) > gapFor("Done.", 150));
+    assert.equal(gapFor("Done.", 0), 0);
+  });
+});
+
+describe("a per-sentence pause", () => {
+  test("the caller's gap wins over the player's default", () => {
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ gapMs: 150, sampleRate: 24_000, spawn: fake.spawn });
+    player.write(Buffer.alloc(80, 7));
+    player.write(Buffer.alloc(80, 7), 60);
+    assert.equal(fake.last().proc.written.length, 80 + Math.round(24_000 * 0.06) * 2 + 80);
   });
 });

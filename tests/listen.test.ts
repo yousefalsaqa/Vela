@@ -17,6 +17,7 @@ import {
   audioDevices,
   transcribe,
   SAMPLE_RATE,
+  pcmFromAudio,
 } from "../src/listen.js";
 import { fakeSpawner, respondToRequests, settle } from "./helpers/proc.js";
 
@@ -550,5 +551,30 @@ describe("cleanTranscript", () => {
 
   test("collapses whisper's line wrapping", () => {
     assert.equal(cleanTranscript("open the\nfantasy project"), "open the fantasy project");
+  });
+});
+
+describe("pcmFromAudio", () => {
+  test("asks ffmpeg for exactly what the warm worker takes", async () => {
+    const fake = fakeSpawner((s) => setImmediate(() => s.proc.close()));
+    await pcmFromAudio(Buffer.from("webm"), { ffmpeg: "ffmpeg", spawn: fake.spawn });
+
+    const { flag, args } = fake.last();
+    assert.equal(flag("-ar"), "16000", "whisper is trained at 16 kHz");
+    assert.equal(flag("-ac"), "1", "and on mono");
+    assert.equal(flag("-f"), "s16le");
+    assert.ok(args.includes("pipe:0") && args.includes("pipe:1"), "nothing touches the disk");
+  });
+
+  test("hands the recording down the pipe rather than writing a file", async () => {
+    const fake = fakeSpawner((s) => setImmediate(() => s.proc.close()));
+    const audio = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
+    await pcmFromAudio(audio, { spawn: fake.spawn });
+    assert.deepEqual(fake.last().proc.written, audio);
+  });
+
+  test("a conversion that fails is silence, which reads as 'didn't catch that'", async () => {
+    const fake = fakeSpawner((s) => setImmediate(() => s.proc.emit("error", new Error("ENOENT"))));
+    assert.equal((await pcmFromAudio(Buffer.from("x"), { spawn: fake.spawn })).length, 0);
   });
 });

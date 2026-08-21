@@ -216,6 +216,108 @@ directory means no skills rather than a fallback set: if it isn't there then
 neither is agent-reach, and naming it anyway would only send her reaching
 through something that doesn't exist.
 
+## The hub
+
+```
+Vela.bat          double-click it
+npm run serve     then open the Hub line it prints
+```
+
+Her second face, at `/` on the same service the REPL attaches to. Same session,
+not a second one: type in the terminal and it appears in the browser, because
+both are clients of one core.
+
+[hub.html](src/hub.html) is one file with no build step. The only thing it
+fetches from outside is the fonts.
+
+**A browser cannot send an `Authorization` header on a navigation, and
+`EventSource` cannot send one at all**, so the token is also accepted as `?k=`.
+The page reads it once and calls `history.replaceState` immediately, so it
+stops living in the address bar and the history.
+
+**The core is driven by real audio, not by a loop.** The rail on the left is a
+canvas whose rim follows the amplitude of whatever is actually making noise:
+her voice when she is speaking, his when the microphone is open, both through
+an `AnalyserNode`. It has one job, which is to be readable from across the room
+without reading anything. Cyan is her working, gold is her speaking, and they
+never appear together because they mean opposite things. Tool calls send a ring
+outward, one each, so activity is countable rather than decorative.
+
+A first attempt drew the constellation Vela behind the transcript. It was
+cropped by `preserveAspectRatio="slice"` into three floating Greek letters and
+no shape, which is a good reminder that a clever idea executed badly is just
+mess. It was cut rather than fixed: the core does the same job better, because
+it is driven by something real.
+
+[anime.js](https://animejs.com) drives the load sequence, message entrances and
+the state tweens. It is vendored and served from `/anime.js` rather than a CDN,
+because she works with the network down and her own face should not be the
+thing that stops. The page checks for it and runs still if it is missing, and
+honours `prefers-reduced-motion`.
+
+| Route | For |
+|---|---|
+| `GET /` | the page |
+| `GET /events` | everything the core does, as it happens |
+| `POST /turn` | say something to her |
+| `POST /hear` | a browser recording in, words out |
+| `POST /speak` | a sentence in, a wav out |
+| `GET /anime.js` | the vendored motion library |
+
+**The voice buttons are her voice, not the browser's.** `POST /speak` runs the
+same Kokoro worker the terminal uses and returns the wav; `POST /hear` runs the
+same warm whisper worker, with ffmpeg converting the browser's webm on the way
+in. Measured on a round trip where she transcribed her own sentence: 0.36s to
+render, 0.45s to read back, and the words came back exactly.
+
+`/health` reports `canHear` and `canSpeak`, and the page hides the buttons it
+cannot back, because a control that does nothing is worse than no control.
+
+**Talking over her counts as an answer.** Pressing the microphone while she is
+still speaking stops her mid-word and sets `cutOff` on the turn that follows.
+The server prefixes that turn with a note saying she was interrupted and that
+the last reply was longer than it needed to be. Feedback she never hears is
+feedback wasted, and the fix she needs is a shorter next answer rather than an
+apology for the last one. Typing over her does the same thing.
+
+## Pauses
+
+Sentences used to arrive flush against each other, because each one is
+synthesised separately and the samples went straight after the last lot. A
+fixed gap fixed that and introduced a worse problem: an even pause is as much a
+tell as an even sentence length, and it lands as a machine reading a list.
+
+`gapFor()` in [voice.ts](src/voice.ts) grades the pause by the mark the
+sentence ended on. Measured at the default 150ms base:
+
+| Ending | Example | Pause |
+|---|---|---|
+| clause | "Two things bother me," | ~105ms |
+| statement | "Loud and clear." | ~185ms |
+| question | "Are you there?" | ~250ms |
+| paragraph | a blank line | ~395ms |
+
+The jitter is a hash of the sentence, so the same words always pause the same
+way and a replayed reply does not shimmer. The hub carries its own copy of the
+same function, so both faces breathe alike rather than the browser inheriting
+whatever the network gave it.
+
+**The pauses only exist between pieces, so a long sentence has to become
+several.** Speech was cut at `.`, `!` and `?` only, which meant a sentence with
+three clauses in it went to Kokoro whole and came back as one unbroken run: the
+comma got whatever prosody the model invents, which is close to none. Written
+down it was three things; heard, it was one long line. `clauses()` in
+[voice.ts](src/voice.ts) breaks a sentence at its commas, semicolons and colons
+so each part is synthesised on its own and earns a beat after it.
+
+It leaves things alone as often as it splits them. Under 70 characters is one
+breath and cutting it invents a pause nobody would make ("Renamed it, tests
+pass."). A fragment under three words is a stutter rather than a clause, so a
+comma with too little on either side is passed over. Anything containing a code
+fence is left whole, because those commas are code. The hub does the same
+split, carrying character offsets with each piece so the reading head still
+sweeps the right words.
+
 ## Running as a service
 
 ```bash
@@ -240,7 +342,8 @@ the events stream never ends, and the turn behind it never got through.
 ## Speaking
 
 ```bash
-VELA_VOICE=on npm run dev
+npm run dev            # she speaks
+VELA_VOICE=off npm run dev
 ```
 
 Three engines, one env var apart:
@@ -259,7 +362,7 @@ at startup rather than per sentence, and it only exists while voice is on.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `VELA_VOICE` | `off` | `on` makes her speak her replies |
+| `VELA_VOICE` | `on` | `off` for a quiet session |
 | `VELA_KOKORO_VOICE` | `bf_emma` | also `bf_isabella`, `bf_alice`, `bf_lily` |
 | `VELA_KOKORO_SPEED` | `1.1` | 1.0 is normal |
 | `VELA_VOICE_NAME` | per engine | edge-tts voice, or a SAPI voice name |
@@ -295,7 +398,7 @@ while the current one is still playing instead of after it. That's the other
 
 **She's told when she's being heard.** Speech is not writing: a paragraph he'd
 skim in two seconds takes twenty to say, and he can't skip the middle. With
-`VELA_VOICE=on` the persona gains [a section](src/config.ts) that caps replies
+speech on, the persona gains [a section](src/config.ts) that caps replies
 at a sentence or two and bans the running commentary — "let me check X", pause,
 "now let me look at Y" — which was most of what made her feel slow, since each
 of those lines is a synthesis, a playback, and then silence while the tool
@@ -304,7 +407,8 @@ actually runs.
 ## Listening
 
 ```bash
-VELA_LISTEN=on npm run dev
+npm run dev             # push-to-talk is on
+VELA_LISTEN=off npm run dev
 ```
 
 Push-to-talk: **Enter on an empty line starts recording, Enter again stops it**,
@@ -332,7 +436,7 @@ isn't there, transcription silently falls back to the CLI and pays the reload.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `VELA_LISTEN` | `off` | `on` enables push-to-talk |
+| `VELA_LISTEN` | `on` | `off` disables push-to-talk |
 | `VELA_MIC` | first microphone | Part of the DirectShow device name |
 | `VELA_WHISPER_MODEL` | `base.en` | `tiny.en` … `small.en`; bigger is slower, better |
 | `VELA_WHISPER_DEVICE` | `cpu` | `cuda` needs the CUDA runtime |
@@ -565,3 +669,5 @@ nothing read it, so if you add to this list, bump it.
 | 1.2.0 | A Kokoro voice worth listening to, one player for the whole conversation, and his name said right. |
 | 1.3.0 | Whisper kept warm instead of reloaded per utterance, memory as an Obsidian vault, and the spoken turn cut down to where it feels live. |
 | 1.4.0 | Skills discovered rather than listed, so she can be handed new hands without a code change. Thirty-four of them, and a voice spec that now says how to recover from a slip. |
+| 1.4.1 | Speaking and listening on by default, because remembering a variable to be spoken to was the surprise, not the speech. The first and last sentence of every reply now get checked before it goes out, which is where she was still giving herself away. |
+| 1.5.0 | A second face: a hub in the browser, with her own voice and her own ears behind it rather than the browser's. |

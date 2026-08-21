@@ -1,0 +1,951 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vela</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/*
+  Her replies are one or two sentences. That is in the persona, not an
+  accident, so a page built for paragraphs is mostly empty by construction.
+  This is built for what she actually says: the answer is set large because it
+  is short, and the work underneath it is the texture.
+
+  Three sizes carry the whole hierarchy. The live answer is display serif. The
+  moment a new one arrives it steps down to body size and dims, so the page
+  always has exactly one thing at full weight. Tool calls are a horizontal
+  band, not a list, because they are a sequence in time rather than an outline.
+
+  The core is not a widget in a corner: it is the room the text sits in. That
+  is what the space on the right is for. Cyan is her working, gold is her
+  speaking, and they never appear together because they mean opposite things.
+*/
+:root {
+  --void: #05090d;
+  --ink: #eef5f8;
+  --dim: #7d97a4;
+  --faint: #455966;
+  --rule: rgba(140, 190, 215, .14);
+  --cyan: #4fd1db;
+  --gold: #f5b95f;
+  --wrong: #ff8172;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--void);
+  color: var(--ink);
+  font: 400 16px/1.6 "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── the room ─────────────────────────────────────────────────────────── */
+#core {
+  position: fixed;
+  right: -12vmin;
+  top: 50%;
+  transform: translateY(-50%);
+  width: min(86vh, 62vw);
+  height: min(86vh, 62vw);
+  z-index: 0;
+  opacity: .78;
+  pointer-events: none;
+}
+.wash {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(58% 58% at 76% 50%, rgba(79, 209, 219, .09), transparent 68%);
+  transition: background .9s ease;
+}
+body[data-state="speaking"] .wash,
+body[data-state="listening"] .wash { background: radial-gradient(58% 58% at 76% 50%, rgba(245, 185, 95, .11), transparent 68%); }
+
+/* ── the strip ────────────────────────────────────────────────────────── */
+.strip {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+  padding: 1.5rem clamp(1.3rem, 5vw, 4rem) 0;
+}
+.wordmark { margin: 0; font: 400 1.85rem/1 "Instrument Serif", ui-serif, Georgia, serif; }
+.wordmark em { font-style: italic; color: var(--cyan); transition: color .6s ease; }
+body[data-state="speaking"] .wordmark em,
+body[data-state="listening"] .wordmark em { color: var(--gold); }
+.mode {
+  margin: 0;
+  font: 500 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.meta {
+  margin: 0 0 0 auto;
+  display: flex;
+  gap: 1.6rem;
+  font: 400 .64rem/1 "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .06em;
+  color: var(--faint);
+}
+.meta b { font-weight: 500; color: var(--dim); }
+
+/* ── the log ──────────────────────────────────────────────────────────── */
+.scroll { position: relative; z-index: 1; flex: 1; overflow-y: auto; padding: 2.4rem clamp(1.3rem, 5vw, 4rem) 1rem; }
+.log { max-width: 44rem; }
+
+.ask {
+  margin: 2.4rem 0 .9rem;
+  font: 400 .74rem/1.5 "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .04em;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+.ask::before { content: "› "; color: var(--faint); }
+.log > .ask:first-child { margin-top: 0; }
+
+/* The work, as a band across the page rather than a bulleted list: these
+   happened one after another, and a rule reads as time passing. */
+.work {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem .9rem;
+  margin: 0 0 1.1rem;
+  padding: .5rem 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  list-style: none;
+  font: 400 .7rem/1.4 "JetBrains Mono", ui-monospace, monospace;
+  color: var(--faint);
+}
+.work li { display: flex; align-items: center; gap: .5rem; overflow-wrap: anywhere; }
+.work li + li::before { content: ""; width: 3px; height: 3px; border-radius: 50%; background: var(--cyan); opacity: .5; }
+.work[hidden] { display: none; }
+
+/* The answer. Large because it is short: a one-line reply set small looks
+   lost, and set large looks deliberate. */
+.answer {
+  margin: 0 0 .8rem;
+  font: 400 clamp(1.35rem, 2.4vw, 1.85rem)/1.35 "Instrument Serif", ui-serif, Georgia, serif;
+  letter-spacing: -.005em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transition: font-size .5s ease, color .5s ease, opacity .5s ease;
+}
+/* Superseded. Exactly one thing on the page is ever at full weight. */
+.answer.past {
+  font: 400 .95rem/1.6 "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  color: var(--dim);
+  opacity: .68;
+}
+.caret { display: inline-block; width: .06em; min-width: 2px; height: .85em; vertical-align: -.05em; background: var(--cyan); margin-left: .06em; }
+
+/* Each word arrives on its own, and lights as it is spoken. The reading head
+   is not decoration: it is where the audio has actually got to. */
+.w { display: inline-block; transition: color .18s ease, text-shadow .18s ease; }
+.answer.past .w { transition: none; }
+.w.saying { color: var(--gold); text-shadow: 0 0 18px rgba(245, 185, 95, .45); }
+.w.said { color: var(--ink); }
+
+/* A schematic per tool, drawn rather than shown. */
+.work li svg { width: 13px; height: 13px; flex: 0 0 auto; overflow: visible; }
+.work li svg * { fill: none; stroke: var(--cyan); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+
+.took { display: flex; align-items: center; gap: .6rem; font: 400 .64rem/1 "JetBrains Mono", ui-monospace, monospace; color: var(--faint); }
+.track { display: flex; width: 4.5rem; height: 2px; background: var(--rule); }
+.think { background: var(--faint); }
+.write { background: var(--cyan); }
+
+/* She started this one. No prompt above it, so it gets its own mark. */
+.unprompted { margin: 2.4rem 0 .8rem; padding-left: 1.1rem; border-left: 2px solid var(--gold); }
+.unprompted .tag { display: block; margin-bottom: .4rem; font: 500 .62rem/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .24em; text-transform: uppercase; color: var(--gold); }
+.unprompted p { margin: 0; font: 400 clamp(1.2rem, 2vw, 1.5rem)/1.4 "Instrument Serif", ui-serif, Georgia, serif; }
+.wrong { margin: 1rem 0; padding-left: .9rem; border-left: 2px solid var(--wrong); color: var(--wrong); font: 400 .78rem/1.5 "JetBrains Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
+
+.opening { max-width: 30rem; }
+.opening h2 { margin: 0 0 .7rem; font: 400 clamp(1.9rem, 3.4vw, 2.6rem)/1.14 "Instrument Serif", ui-serif, Georgia, serif; }
+.opening h2 em { font-style: italic; color: var(--cyan); }
+.opening p { margin: 0; color: var(--dim); max-width: 26rem; }
+
+/* ── the dock ─────────────────────────────────────────────────────────── */
+.compose { position: relative; z-index: 2; padding: .5rem clamp(1.3rem, 5vw, 4rem) 1.6rem; }
+.dock { max-width: 44rem; display: flex; align-items: flex-end; gap: .55rem; padding-top: .6rem; border-top: 1px solid var(--rule); transition: border-color .4s ease; }
+.dock:focus-within { border-color: rgba(79, 209, 219, .5); }
+.dock textarea {
+  flex: 1;
+  min-height: 2.1rem;
+  max-height: 28vh;
+  padding: .3rem 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: 400 1rem/1.5 "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  resize: none;
+}
+.dock textarea:focus { outline: none; }
+.dock textarea::placeholder { color: var(--faint); }
+
+.key { display: flex; align-items: center; justify-content: center; width: 2.1rem; height: 2.1rem; flex: 0 0 auto; border: 0; background: none; color: var(--faint); cursor: pointer; transition: color .2s; }
+.key:hover { color: var(--ink); }
+.key:focus-visible { outline: 1px solid var(--cyan); outline-offset: 3px; }
+.key[aria-pressed="true"] { color: var(--gold); }
+.key.hot { color: var(--gold); }
+.key[hidden] { display: none; }
+.key svg { width: 1.05rem; height: 1.05rem; fill: currentColor; }
+.go { width: auto; padding: 0 .2rem; font: 500 .68rem/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase; color: var(--cyan); }
+.go:hover { color: var(--ink); }
+.hint { max-width: 44rem; margin: .55rem 0 0; font: 400 .62rem/1 "JetBrains Mono", ui-monospace, monospace; color: var(--faint); letter-spacing: .05em; }
+
+@media (max-width: 760px) {
+  #core { right: -30vmin; opacity: .5; width: min(70vh, 110vw); height: min(70vh, 110vw); }
+  .meta { display: none; }
+  .strip { gap: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body data-state="idle">
+
+<div class="wash"></div>
+<canvas id="core" width="900" height="900" aria-hidden="true"></canvas>
+
+<header class="strip">
+  <h1 class="wordmark">V<em>e</em>la</h1>
+  <p class="mode" id="mode">connecting</p>
+  <p class="meta">
+    <span>turns <b id="turns">0</b></span>
+    <span>tools <b id="tools">0</b></span>
+    <span id="build">—</span>
+  </p>
+</header>
+
+<div class="scroll" id="scroll">
+  <div class="log" id="log">
+    <div class="opening" id="opening">
+      <h2>She has been running this whole <em>time</em>.</h2>
+      <p>The same session as the terminal, not a second one. Anything typed there appears here, and when a watch fires she starts a line herself.</p>
+    </div>
+  </div>
+</div>
+
+<form class="compose" id="compose">
+  <div class="dock">
+    <textarea id="text" rows="1" placeholder="Say something" autocomplete="off" autofocus></textarea>
+    <button type="button" class="key" id="mic" title="Speak. Press again to send." hidden>
+      <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V22h2v-3.1A7 7 0 0 0 19 12Z"/></svg>
+    </button>
+    <button type="button" class="key" id="ear" title="Hear her replies" aria-pressed="false" hidden>
+      <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9H4Zm13.5 3A4.5 4.5 0 0 0 15 8v8a4.5 4.5 0 0 0 2.5-4Z"/></svg>
+    </button>
+    <button type="submit" class="key go">Send</button>
+  </div>
+  <p class="hint" id="hint">Enter sends · Shift and Enter for a new line</p>
+</form>
+
+<script src="/anime.js"></script>
+<script>
+"use strict";
+
+/* EventSource cannot carry a header, so the token arrives in the address bar.
+   Read it once and put the bar back, so it stops living in the history. */
+const KEY = new URLSearchParams(location.search).get("k") || "";
+history.replaceState(null, "", location.pathname);
+const auth = { authorization: "Bearer " + KEY };
+
+const $ = (id) => document.getElementById(id);
+const log = $("log"), scroll = $("scroll"), opening = $("opening");
+const modeEl = $("mode"), buildEl = $("build"), turnsEl = $("turns"), toolsEl = $("tools");
+const form = $("compose"), text = $("text"), micKey = $("mic"), earKey = $("ear"), hintEl = $("hint");
+
+const A = window.anime || null;
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const animate = (t, o) => (A && !still ? A.animate(t, o) : null);
+
+/* ════════════════════════════════════════════════════════════════════════
+   THE CORE
+
+   The room the text sits in, not a widget beside it. Its rim follows the
+   amplitude of whatever is actually making noise: her voice when she speaks,
+   his when the microphone is open. Nothing here loops pretending to be busy.
+   ════════════════════════════════════════════════════════════════════════ */
+const core = $("core");
+const g = core.getContext("2d");
+const CX = 450, CY = 450;
+
+const CYAN = [79, 209, 219];
+const GOLD = [245, 185, 95];
+const rgba = (c, a) => "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")";
+const mix = (a, b, t) => [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * t));
+
+const core_ = { warmth: 0, energy: 0, amp: 0, spin: 0, ripples: [] };
+let analyser = null, ampData = null;
+
+function drawCore(now) {
+  requestAnimationFrame(drawCore);
+  g.clearRect(0, 0, 900, 900);
+
+  let target = 0;
+  if (analyser) {
+    analyser.getByteTimeDomainData(ampData);
+    let peak = 0;
+    for (let i = 0; i < ampData.length; i++) peak = Math.max(peak, Math.abs(ampData[i] - 128));
+    target = Math.min(1, peak / 70);
+  }
+  core_.amp += (target - core_.amp) * 0.22;
+
+  const tint = mix(CYAN, GOLD, core_.warmth);
+  const breath = Math.sin(now / 1800) * 0.5 + 0.5;
+  core_.spin += 0.0012 + core_.energy * 0.005;
+
+  // Three nested rims. The outer two are slow and structural; the inner one
+  // is the voice, and it is the only thing that moves quickly.
+  for (let ring = 0; ring < 3; ring++) {
+    const inner = ring === 0;
+    const base = 210 + ring * 78 + breath * (inner ? 8 : 3);
+    g.beginPath();
+    const STEPS = 200;
+    for (let i = 0; i <= STEPS; i++) {
+      const a = (i / STEPS) * Math.PI * 2;
+      const wob =
+        Math.sin(a * (3 + ring) + core_.spin * (6 - ring * 1.6)) * (5 - ring) +
+        Math.sin(a * (7 + ring * 2) - core_.spin * 9) * 2.4;
+      const voice = inner ? core_.amp * 92 * (0.66 + 0.34 * Math.sin(a * 5 + now / 200)) : 0;
+      const r = base + wob * (0.5 + core_.energy) + voice;
+      const x = CX + Math.cos(a) * r, y = CY + Math.sin(a) * r;
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    g.closePath();
+    g.strokeStyle = rgba(tint, inner ? 0.72 : 0.2 - ring * 0.05);
+    g.lineWidth = inner ? 1.7 : 1;
+    g.stroke();
+    if (inner) { g.fillStyle = rgba(tint, 0.035 + core_.amp * 0.07); g.fill(); }
+  }
+
+  // Two arcs that tighten and speed up while she works. Peripheral by design:
+  // you notice them without looking at them.
+  for (let ring = 0; ring < 2; ring++) {
+    const dir = ring ? -1 : 1;
+    g.beginPath();
+    g.arc(CX, CY, 300 + ring * 44, core_.spin * dir * 2.2 + ring, core_.spin * dir * 2.2 + ring + 0.45 + core_.energy * 0.8);
+    g.strokeStyle = rgba(tint, 0.14 + core_.energy * 0.34);
+    g.lineWidth = ring ? 1 : 2.4;
+    g.stroke();
+  }
+
+  // A dotted horizon so the whole thing has a floor and does not swim.
+  g.beginPath();
+  for (let i = 0; i < 90; i++) {
+    const a = (i / 90) * Math.PI * 2, r = 408;
+    g.moveTo(CX + Math.cos(a) * r, CY + Math.sin(a) * r);
+    g.lineTo(CX + Math.cos(a) * (r + 5), CY + Math.sin(a) * (r + 5));
+  }
+  g.strokeStyle = rgba(tint, 0.11);
+  g.lineWidth = 1;
+  g.stroke();
+
+  // One ring per tool call, so the work is countable rather than decorative.
+  for (let i = core_.ripples.length - 1; i >= 0; i--) {
+    const rip = core_.ripples[i];
+    const t = (now - rip.at) / rip.life;
+    if (t >= 1) { core_.ripples.splice(i, 1); continue; }
+    g.beginPath();
+    g.arc(CX, CY, 200 + t * 230, 0, Math.PI * 2);
+    g.strokeStyle = rgba(rip.warm ? GOLD : tint, (1 - t) * 0.45);
+    g.lineWidth = 1.6 * (1 - t) + 0.3;
+    g.stroke();
+  }
+}
+requestAnimationFrame(drawCore);
+
+const ripple = (warm) => core_.ripples.push({ at: performance.now(), life: warm ? 2400 : 1400, warm: !!warm });
+
+/* ════════════════════════════════════════════════════════════════════════
+   Schematics
+
+   A tool line is a verb and an object: "Read ambient.ts", "Grep heartbeat",
+   "gws-calendar +agenda". The verb says what kind of work it was, so it gets
+   a drawing rather than a bullet. Line art only, drawn on with the stroke,
+   because a filled icon set would read as a toolbar and this is a readout.
+   ════════════════════════════════════════════════════════════════════════ */
+const GLYPHS = {
+  file: "M4 2h7l4 4v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z M11 2v4h4",
+  find: "M8.5 3a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Z M12.5 12.5 17 17",
+  shell: "M3 4h14v11H3z M6 8l2.5 2L6 12 M10.5 12H14",
+  web: "M10 2.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15Z M2.5 10h15 M10 2.5c2 2.5 2 12.5 0 15 M10 2.5c-2 2.5-2 12.5 0 15",
+  time: "M4 4h12v13H4z M4 8h12 M7 2v4 M13 2v4 M8 12h4",
+  mail: "M3 5h14v10H3z M3 5l7 6 7-6",
+  brain: "M6 4h8v5a4 4 0 0 1-8 0Z M8 13v4 M12 13v4 M6 17h8",
+  screen: "M3 4h14v9H3z M8 16h4 M10 13v3",
+  write: "M4 15l1-4 8-8 3 3-8 8-4 1Z",
+  work: "M10 2v4 M10 14v4 M2 10h4 M14 10h4 M10 6a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z",
+};
+
+/** What kind of work a tool line describes, from the verb at the front. */
+function glyphFor(line) {
+  const v = line.trim().split(/[\s(]/)[0].toLowerCase();
+  if (/read|cat|head|tail|open/.test(v)) return "file";
+  if (/grep|glob|find|search|screen/.test(v)) return "find";
+  if (/bash|shell|powershell|npm|git|run/.test(v)) return "shell";
+  if (/web|fetch|reach|http|browser_history|curl/.test(v)) return "web";
+  if (/calendar|agenda|watch|heartbeat|tick/.test(v)) return "time";
+  if (/gmail|mail|send|triage/.test(v)) return "mail";
+  if (/remember|forget|memory|vault|recall/.test(v)) return "brain";
+  if (/launch_app|desktop|media_control|window/.test(v)) return "screen";
+  if (/write|edit|multiedit|notebook/.test(v)) return "write";
+  return "work";
+}
+
+/** Draw it on, rather than switch it on. */
+function schematic(kind) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 20 20");
+  for (const d of GLYPHS[kind].trim().split(/\s+M/).map((p, i) => (i ? "M" + p : p))) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  if (A && !still) {
+    for (const path of svg.querySelectorAll("path")) {
+      const len = 60;
+      path.style.strokeDasharray = len;
+      path.style.strokeDashoffset = len;
+      A.animate(path, { strokeDashoffset: [len, 0], duration: 520, ease: "outQuad" });
+    }
+  }
+  return svg;
+}
+
+function setState(state, label) {
+  document.body.dataset.state = state;
+  modeEl.textContent = label;
+  const warmth = state === "speaking" || state === "listening" ? 1 : 0;
+  const energy = state === "thinking" ? 1 : state === "listening" ? 0.55 : state === "speaking" ? 0.4 : 0;
+  if (A && !still) A.animate(core_, { warmth, energy, duration: 750, ease: "outQuad" });
+  else { core_.warmth = warmth; core_.energy = energy; }
+  animate(modeEl, { opacity: [0.25, 1], duration: 420 });
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   The log
+   ════════════════════════════════════════════════════════════════════════ */
+let open = null, turns = 0, tools = 0, pinned = true;
+scroll.addEventListener("scroll", () => {
+  pinned = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+});
+const follow = () => { if (pinned) scroll.scrollTop = scroll.scrollHeight; };
+const begun = () => {
+  if (!opening.isConnected) return;
+  if (A && !still) A.animate(opening, { opacity: 0, translateY: -10, duration: 280, ease: "inQuad", onComplete: () => opening.remove() });
+  else opening.remove();
+};
+const enter = (el, from) => animate(el, { opacity: [0, 1], translateY: [from || 8, 0], duration: 420, ease: "outCubic" });
+
+/** Exactly one answer is ever at full weight. Everything before it steps down. */
+function recede() {
+  for (const el of log.querySelectorAll(".answer:not(.past)")) el.classList.add("past");
+}
+
+function yours(said) {
+  begun();
+  const p = document.createElement("p");
+  p.className = "ask";
+  p.textContent = said;
+  log.append(p);
+  enter(p);
+  follow();
+}
+
+function hers() {
+  if (open) return open;
+  begun();
+  recede();
+  const work = document.createElement("ul");
+  work.className = "work";
+  work.hidden = true;
+  const answer = document.createElement("p");
+  answer.className = "answer";
+  const caret = document.createElement("span");
+  caret.className = "caret";
+  answer.append(caret);
+  log.append(work, answer);
+  enter(answer, 10);
+  animate(caret, { opacity: [1, 0.12], duration: 640, loop: true, alternate: true, ease: "inOutSine" });
+  open = { work, answer, caret, startedAt: Date.now(), firstDelta: 0, words: "", spoken: 0, emitted: 0, spans: [] };
+  setState("thinking", "working");
+  follow();
+  return open;
+}
+
+function tool(lines) {
+  const t = hers();
+  for (const line of lines) {
+    const li = document.createElement("li");
+    li.append(schematic(glyphFor(line)));
+    li.append(document.createTextNode(line));
+    t.work.append(li);
+    enter(li, 0);
+    ripple(false);
+    toolsEl.textContent = ++tools;
+  }
+  t.work.hidden = false;
+  follow();
+}
+
+/**
+ * Set the words that have landed, one span each.
+ *
+ * The last token is held back until whitespace follows it, because a word
+ * half-arrived is a word spelling itself out, and that reads as a stutter
+ * rather than as speech. Each span remembers where it sits in the reply, which
+ * is what lets the audio light it later.
+ */
+function renderWords(t, final) {
+  const tokens = t.words.split(/(\s+)/);
+  const upto = final ? tokens.length : tokens.length - 1;
+  let at = 0;
+  for (let i = 0; i < upto; i++) {
+    const tok = tokens[i];
+    const start = at;
+    at += tok.length;
+    if (i < t.emitted || !tok) continue;
+    if (/^\s+$/.test(tok)) {
+      t.answer.insertBefore(document.createTextNode(tok), t.caret);
+      continue;
+    }
+    const span = document.createElement("span");
+    span.className = "w";
+    span.textContent = tok;
+    t.answer.insertBefore(span, t.caret);
+    t.spans.push({ el: span, start, end: at });
+    animate(span, {
+      opacity: [0, 1],
+      filter: ["blur(5px)", "blur(0px)"],
+      translateY: [5, 0],
+      duration: 320,
+      ease: "outQuad",
+    });
+  }
+  t.emitted = Math.max(t.emitted, upto);
+}
+
+function delta(chunk) {
+  const t = hers();
+  if (!t.firstDelta) t.firstDelta = Date.now();
+  t.words += chunk;
+  renderWords(t);
+  speakReady(t);
+  follow();
+}
+
+function done(ms, fallback) {
+  const t = open;
+  if (!t) return;
+  if (fallback && !t.words) t.words = fallback;
+  renderWords(t, true);
+  t.caret.remove();
+  speakRest(t);
+
+  const total = ms || Date.now() - t.startedAt;
+  const think = t.firstDelta ? t.firstDelta - t.startedAt : total;
+  const pct = Math.max(4, Math.min(96, Math.round((think / total) * 100)));
+  const took = document.createElement("p");
+  took.className = "took";
+  took.innerHTML =
+    '<span class="track"><span class="think" style="width:' + pct + '%"></span>' +
+    '<span class="write" style="width:' + (100 - pct) + '%"></span></span>' +
+    "<span>" + (think / 1000).toFixed(1) + "s to first word · " + (total / 1000).toFixed(1) + "s</span>";
+  log.append(took);
+  enter(took, 4);
+
+  open = null;
+  turnsEl.textContent = ++turns;
+  if (!speakingNow) setState("idle", "listening");
+  follow();
+}
+
+function unprompted(said) {
+  begun();
+  recede();
+  ripple(true);
+  const box = document.createElement("aside");
+  box.className = "unprompted";
+  const now = new Date();
+  box.innerHTML =
+    '<span class="tag">she started this · ' +
+    String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") + "</span>";
+  const p = document.createElement("p");
+  p.textContent = said;
+  box.append(p);
+  log.append(box);
+  animate(box, { opacity: [0, 1], translateX: [-12, 0], duration: 540, ease: "outCubic" });
+  if (speaking) enqueue(said);
+  follow();
+}
+
+function wrong(message) {
+  begun();
+  const box = document.createElement("div");
+  box.className = "wrong";
+  box.textContent = message;
+  log.append(box);
+  enter(box);
+  follow();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Her voice: the same Kokoro the terminal uses
+   ════════════════════════════════════════════════════════════════════════ */
+let speaking = false, canSpeak = false, speakingNow = false;
+let audioQueue = [], playing = false, current = null, sound = null;
+
+/**
+ * A browser starts an AudioContext suspended unless it was made during a real
+ * click, and routing an element through a suspended one is silence with no
+ * error to show for it. Built on the button press; every caller checks it is
+ * genuinely running before attaching anything.
+ */
+function ears() {
+  if (!sound) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try { sound = new Ctx(); } catch { return null; }
+  }
+  if (sound.state === "suspended") sound.resume().catch(() => {});
+  return sound;
+}
+function liveEars() {
+  const ctx = ears();
+  return ctx && ctx.state === "running" ? ctx : null;
+}
+
+/* The same graded pause the terminal uses, so both faces breathe alike. A
+   clause is barely a beat, a question hangs, a paragraph is a proper stop.
+   Mirrors gapFor() in voice.ts. */
+function gapAfter(said, base) {
+  const end = said.trimEnd().slice(-1);
+  const scale = /\n/.test(said.slice(-2)) ? 2.6
+    : end === "?" || end === "!" ? 1.6
+    : end === "." ? 1.15
+    : end === "," || end === ";" || end === ":" ? 0.7
+    : 0.75;
+  let n = 0;
+  for (let i = 0; i < said.length; i++) n = (n * 31 + said.charCodeAt(i)) >>> 0;
+  return Math.round((base || 150) * scale * (0.85 + (n % 30) / 100));
+}
+
+/* Break a long sentence at its clauses, so each one gets its own beat. Handed
+   over whole, a three-clause sentence is synthesised as one unbroken run and
+   the pauses above never fire inside it. Mirrors clauses() in voice.ts, but
+   carries character offsets because the reading head sweeps by range. */
+const CLAUSE_MIN_WORDS = 3, CLAUSE_MIN_CHARS = 70;
+function countWords(s) { return s.trim().split(/\s+/).filter(Boolean).length; }
+function clausesOf(text, from) {
+  if (text.trim().length < CLAUSE_MIN_CHARS || text.includes("```")) {
+    return [[text, from, from + text.length]];
+  }
+  const out = [];
+  let at = 0;
+  for (;;) {
+    const cut = /[,;:]\s/.exec(text.slice(at));
+    if (!cut) break;
+    const end = at + cut.index + 1;
+    const head = text.slice(at, end), tail = text.slice(end + cut[0].length - 1);
+    if (countWords(head) < CLAUSE_MIN_WORDS || countWords(tail) < CLAUSE_MIN_WORDS) break;
+    out.push([head, from + at, from + end]);
+    at = end + cut[0].length - 1;
+  }
+  if (at < text.length) out.push([text.slice(at), from + at, from + text.length]);
+  return out.length ? out : [[text, from, from + text.length]];
+}
+
+async function enqueue(sentence, range) {
+  const said = sentence.trim();
+  if (!said || !canSpeak || !speaking) return;
+  audioQueue.push({ said, range: range || null, spans: (open && open.spans) || null });
+  if (!playing) drainAudio();
+}
+
+/**
+ * The reading head.
+ *
+ * Kokoro returns a wav and no word timings, so the sweep is proportional:
+ * the audio's own duration spread across the characters of the sentence it
+ * came from. It is an approximation, and at one sentence at a time it is close
+ * enough to track by eye. It follows the real clock of the real audio, so it
+ * stops dead when she is cut off rather than finishing without her.
+ */
+function sweep(el, item) {
+  if (!item.spans || !item.range) return () => {};
+  const [from, to] = item.range;
+  const width = to - from;
+  const mine = item.spans.filter((s) => s.start >= from && s.end <= to);
+  if (!mine.length || !width) return () => {};
+
+  let alive = true;
+  (function tick() {
+    if (!alive) return;
+    requestAnimationFrame(tick);
+    const d = el.duration;
+    if (!d || !isFinite(d)) return;
+    const head = from + (el.currentTime / d) * width;
+    for (const s of mine) {
+      const on = s.start <= head && head < s.end;
+      const gone = s.end <= head;
+      s.el.classList.toggle("saying", on);
+      s.el.classList.toggle("said", gone);
+    }
+  })();
+
+  return () => {
+    alive = false;
+    for (const s of mine) s.el.classList.remove("saying");
+  };
+}
+
+async function drainAudio() {
+  playing = true;
+  let first = true;
+  while (audioQueue.length && speaking) {
+    const item = audioQueue.shift();
+    const said = item.said;
+    // Never before the opening sentence, which is the one he is waiting on.
+    if (!first) await new Promise((r) => setTimeout(r, gapAfter(said, 150)));
+    first = false;
+    try {
+      const res = await fetch("/speak", {
+        method: "POST",
+        headers: Object.assign({ "content-type": "application/json" }, auth),
+        body: JSON.stringify({ text: said }),
+      });
+      if (!res.ok) continue;
+      const url = URL.createObjectURL(await res.blob());
+      await new Promise((finish) => {
+        const a = new Audio(url);
+        current = a;
+        // A core that does not move is a small loss. A voice that does not
+        // play is the whole feature, so the tap is optional and playback is not.
+        const ctx = liveEars();
+        if (ctx) {
+          try {
+            const src = ctx.createMediaElementSource(a);
+            const an = ctx.createAnalyser();
+            an.fftSize = 512;
+            src.connect(an);
+            an.connect(ctx.destination);
+            analyser = an;
+            ampData = new Uint8Array(an.frequencyBinCount);
+          } catch { analyser = null; }
+        }
+        speakingNow = true;
+        setState("speaking", "speaking");
+        const stopSweep = sweep(a, item);
+        const end = () => { stopSweep(); URL.revokeObjectURL(url); current = null; finish(); };
+        a.onended = a.onerror = end;
+        a.play().catch(end);
+      });
+    } catch { /* a sentence that would not render is skipped, not fatal */ }
+  }
+  playing = false;
+  speakingNow = false;
+  analyser = null;
+  if (!open) setState("idle", "listening");
+}
+
+/** Stop mid-sentence. Called when he talks over her. */
+function hush() {
+  audioQueue = [];
+  if (current) { try { current.pause(); } catch {} current.onended = current.onerror = null; current = null; }
+  // The head must not be left lit on the word she was cut off at.
+  for (const el of document.querySelectorAll(".w.saying")) el.classList.remove("saying");
+  playing = false;
+  speakingNow = false;
+  analyser = null;
+}
+
+const ENDS = /[.!?]["')\]]?(\s|$)/g;
+function speakReady(t) {
+  if (!speaking) return;
+  ENDS.lastIndex = 0;
+  let cut = -1, m;
+  while ((m = ENDS.exec(t.words))) cut = m.index + m[0].length;
+  if (cut > t.spoken) {
+    for (const [piece, from, to] of clausesOf(t.words.slice(t.spoken, cut), t.spoken)) {
+      enqueue(piece, [from, to]);
+    }
+    t.spoken = cut;
+  }
+}
+function speakRest(t) {
+  if (speaking && t.words.length > t.spoken) {
+    for (const [piece, from, to] of clausesOf(t.words.slice(t.spoken), t.spoken)) {
+      enqueue(piece, [from, to]);
+    }
+    t.spoken = t.words.length;
+  }
+}
+
+earKey.addEventListener("click", () => {
+  speaking = !speaking;
+  earKey.setAttribute("aria-pressed", String(speaking));
+  // Inside the click, because this is the gesture the browser wants before it
+  // will let the page make noise.
+  if (speaking) ears();
+  else hush();
+  animate(earKey, { scale: [0.84, 1], duration: 320, ease: "outBack" });
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   His voice
+   ════════════════════════════════════════════════════════════════════════ */
+let recorder = null, chunks = [], canHear = false, cutOff = false, micStream = null;
+
+async function startListening() {
+  /* Talking over her is an answer in itself: she has said enough. Stop her
+     mid-word, and remember it so the next turn carries the reason. */
+  if (speakingNow || audioQueue.length) { hush(); cutOff = true; }
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recorder = new MediaRecorder(micStream);
+    chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = onHeard;
+    recorder.start();
+
+    // Nothing is routed through the context here, so a suspended one costs the
+    // animation and never the recording.
+    const ctx = liveEars();
+    if (ctx) {
+      try {
+        const an = ctx.createAnalyser();
+        an.fftSize = 512;
+        ctx.createMediaStreamSource(micStream).connect(an);
+        analyser = an;
+        ampData = new Uint8Array(an.frequencyBinCount);
+      } catch { analyser = null; }
+    }
+
+    micKey.classList.add("hot");
+    hintEl.textContent = "Listening · press again when you are done";
+    setState("listening", "listening");
+  } catch {
+    wrong("The browser would not open the microphone. Check its permission for this page.");
+  }
+}
+
+async function onHeard() {
+  micStream && micStream.getTracks().forEach((t) => t.stop());
+  micStream = null;
+  analyser = null;
+  micKey.classList.remove("hot");
+  setState("thinking", "making it out");
+  hintEl.textContent = "Working out what you said";
+  try {
+    const res = await fetch("/hear", { method: "POST", headers: auth, body: new Blob(chunks) });
+    const { text: heard } = await res.json();
+    hintEl.textContent = "Enter sends · Shift and Enter for a new line";
+    if (heard && heard.trim()) say(heard.trim());
+    else { setState("idle", "listening"); wrong("Nothing came through on that one."); }
+  } catch {
+    hintEl.textContent = "Enter sends · Shift and Enter for a new line";
+    setState("idle", "listening");
+    wrong("Could not send that recording.");
+  }
+}
+
+micKey.addEventListener("click", () => {
+  if (recorder && recorder.state === "recording") recorder.stop();
+  else startListening();
+  animate(micKey, { scale: [0.84, 1], duration: 320, ease: "outBack" });
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   The wire
+   ════════════════════════════════════════════════════════════════════════ */
+function listen() {
+  const events = new EventSource("/events?k=" + encodeURIComponent(KEY));
+  events.onopen = () => setState("idle", "listening");
+  events.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    if (ev.type === "activity") tool(ev.lines || []);
+    else if (ev.type === "delta") delta(ev.text || "");
+    else if (ev.type === "result") done(ev.ms, ev.text);
+    else if (ev.type === "say") unprompted(ev.text || "");
+    else if (ev.type === "error") { wrong(ev.message || "Something went wrong."); open = null; setState("idle", "listening"); }
+  };
+  // It reconnects itself. Say so, because silence is also what working looks like.
+  events.onerror = () => setState("lost", "reconnecting");
+}
+
+async function say(said) {
+  yours(said);
+  const interrupted = cutOff;
+  cutOff = false;
+  try {
+    const res = await fetch("/turn", {
+      method: "POST",
+      headers: Object.assign({ "content-type": "application/json" }, auth),
+      body: JSON.stringify({ text: said, cutOff: interrupted }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      wrong("She did not take that: " + (body.error || res.status));
+    }
+  } catch {
+    wrong("Could not reach her. The service may have stopped.");
+    setState("lost", "offline");
+  }
+}
+
+const grow = () => { text.style.height = "auto"; text.style.height = Math.min(text.scrollHeight, innerHeight * 0.28) + "px"; };
+text.addEventListener("input", grow);
+text.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+});
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const said = text.value.trim();
+  if (!said) return;
+  if (speakingNow || audioQueue.length) { hush(); cutOff = true; } // typing over her counts too
+  text.value = "";
+  grow();
+  say(said);
+});
+
+fetch("/health", { headers: auth })
+  .then((r) => r.json())
+  .then((h) => {
+    buildEl.textContent = "pid " + h.pid;
+    canHear = Boolean(h.canHear);
+    canSpeak = Boolean(h.canSpeak);
+    // A control that cannot work is worse than no control.
+    micKey.hidden = !canHear;
+    earKey.hidden = !canSpeak;
+  })
+  .catch(() => {});
+
+/* She comes up rather than appearing. One sequence, once, on load. */
+if (A && !still) {
+  A.createTimeline({ defaults: { ease: "outCubic" } })
+    .add(core, { opacity: [0, 0.78], scale: [0.9, 1], duration: 1100 })
+    .add(".wordmark", { opacity: [0, 1], translateY: [8, 0], duration: 500 }, "-=760")
+    .add(".mode", { opacity: [0, 1], duration: 420 }, "-=320")
+    .add(".meta span", { opacity: [0, 1], duration: 380, delay: A.stagger(80) }, "-=280")
+    .add(".opening", { opacity: [0, 1], translateY: [14, 0], duration: 620 }, "-=420")
+    .add(".dock", { opacity: [0, 1], duration: 480 }, "-=460");
+}
+
+listen();
+</script>
+</body>
+</html>
