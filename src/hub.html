@@ -339,10 +339,23 @@ body[data-screen] #core { opacity: .16; }
 <script>
 "use strict";
 
-/* EventSource cannot carry a header, so the token arrives in the address bar.
-   Read it once and put the bar back, so it stops living in the history. */
-const KEY = new URLSearchParams(location.search).get("k") || "";
-history.replaceState(null, "", location.pathname);
+/* Her key.
+
+   EventSource cannot carry a header, so it arrives in the address bar, and is
+   taken out of the bar immediately so it stops living in the history. That
+   alone used to make the page single-use: reloading a tab sent a bare URL and
+   she turned it away. The key is kept here instead, so a tab he pinned once
+   still opens months later. It stays in this page's own storage, which the
+   sandboxed screen frame has no way to read. */
+const STORE = "vela.key";
+const fromBar = new URLSearchParams(location.search).get("k") || "";
+let saved = "";
+try { saved = localStorage.getItem(STORE) || ""; } catch { saved = ""; }
+if (fromBar) {
+  try { localStorage.setItem(STORE, fromBar); } catch { /* private window; this tab still works */ }
+  history.replaceState(null, "", location.pathname);
+}
+const KEY = fromBar || saved;
 const auth = { authorization: "Bearer " + KEY };
 
 const $ = (id) => document.getElementById(id);
@@ -1096,24 +1109,47 @@ form.addEventListener("submit", (e) => {
   say(said);
 });
 
-fetch("/health", { headers: auth })
-  .then((r) => r.json())
-  .then((h) => {
-    buildEl.textContent = "pid " + h.pid;
-    canHear = Boolean(h.canHear);
-    canSpeak = Boolean(h.canSpeak);
-    // A control that cannot work is worse than no control.
-    micKey.hidden = !canHear;
-    earKey.hidden = !canSpeak;
-  })
-  .catch(() => {});
+/* No key, or one she no longer accepts. Say which, and say where the real one
+   lives — a page that just sits there dead is the worst of the three. */
+function locked(why) {
+  try { localStorage.removeItem(STORE); } catch { /* nothing to forget */ }
+  setState("lost", "locked");
+  opening.innerHTML =
+    "<h2>She does not know <em>you</em> yet.</h2>" +
+    "<p>" + why + " Her link, with the key on the end of it, is printed by " +
+    "<code>npm run serve</code> and kept in <code>data/server.json</code>. " +
+    "Open it once and this tab remembers it.</p>";
+  form.hidden = true;
+}
+
+if (!KEY) {
+  locked("This tab has no key.");
+} else {
+  fetch("/health", { headers: auth })
+    .then((r) => {
+      if (r.status === 401) { locked("The key this tab remembered is not hers any more."); return null; }
+      return r.json();
+    })
+    .then((h) => {
+      if (!h) return;
+      buildEl.textContent = "pid " + h.pid;
+      canHear = Boolean(h.canHear);
+      canSpeak = Boolean(h.canSpeak);
+      // A control that cannot work is worse than no control.
+      micKey.hidden = !canHear;
+      earKey.hidden = !canSpeak;
+    })
+    .catch(() => {});
+}
 
 /* Whatever she had up survives a reload. Quiet, because the stage opening
    again is not news. */
-fetch("/screen", { headers: auth })
-  .then((r) => r.json())
-  .then(({ screen }) => { if (screen) showScreen(screen, true); })
-  .catch(() => {});
+if (KEY) {
+  fetch("/screen", { headers: auth })
+    .then((r) => (r.ok ? r.json() : { screen: null }))
+    .then(({ screen }) => { if (screen) showScreen(screen, true); })
+    .catch(() => {});
+}
 
 /* She comes up rather than appearing. One sequence, once, on load. */
 if (A && !still) {
@@ -1126,7 +1162,9 @@ if (A && !still) {
     .add(".dock", { opacity: [0, 1], duration: 480 }, "-=460");
 }
 
-listen();
+// Without a key there is nothing to listen to, and an EventSource that
+// retries a 401 for ever is a worse silence than an honest one.
+if (KEY) listen();
 </script>
 </body>
 </html>

@@ -225,13 +225,14 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
       return;
     }
 
-    if (!authed(req, query.get("k"))) {
-      res.writeHead(401, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "bad or missing token" }));
-      return;
-    }
-
     // Her second face. One file, no build step, no request to anywhere else.
+    //
+    // Served without a key, and that is deliberate. The page holds no secrets
+    // — every route that carries anything of his is still locked — and the
+    // page is what asks for the key rather than what leaks it. Behind the
+    // gate, the pinned tab this release exists for could not survive being
+    // reloaded: the page strips ?k= from the address bar as its first act, so
+    // the reload arrives bare and is turned away before any of it can run.
     if (req.method === "GET" && (path === "/" || path === "/hub")) {
       try {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -240,6 +241,12 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "hub.html is missing" }));
       }
+      return;
+    }
+
+    if (!authed(req, query.get("k"))) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "bad or missing token" }));
       return;
     }
 

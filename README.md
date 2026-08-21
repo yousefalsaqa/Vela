@@ -236,6 +236,15 @@ fetches from outside is the fonts.
 The page reads it once and calls `history.replaceState` immediately, so it
 stops living in the address bar and the history.
 
+**Which is why the page itself is the one route with no lock on it.** Stripping
+`?k=` means every reload after the first arrives bare, and behind the gate that
+is a dead tab — the pinned tab a fixed address exists for could be opened
+exactly once. The page holds no secrets and every route that carries anything
+of his is still shut, so the door that opens is the doorframe, not the house.
+The key is kept in the page's own `localStorage`, which the sandboxed screen
+frame has no way to read, and a tab that has none says so and points at
+`data/server.json` rather than sitting there dead.
+
 **The core is driven by real audio, not by a loop.** The rail on the left is a
 canvas whose rim follows the amplitude of whatever is actually making noise:
 her voice when she is speaking, his when the microphone is open, both through
@@ -258,7 +267,7 @@ honours `prefers-reduced-motion`.
 
 | Route | For |
 |---|---|
-| `GET /` | the page |
+| `GET /` | the page; the one route with no key on it, see below |
 | `GET /events` | everything the core does, as it happens |
 | `POST /turn` | say something to her |
 | `POST /hear` | a browser recording in, words out |
@@ -783,3 +792,4 @@ you add to this list, bump it.
 | 1.5.0 | A second face: a hub in the browser, with her own voice and her own ears behind it rather than the browser's. |
 | 1.6.0 | A screen. She writes a page — a schematic, a chart, a clickable diagram — and puts it on the hub's stage, and what he does on it comes back to her as words. The page gets a key that opens one route and a CSP that closes the rest. |
 | 2.0.0 | Always on. She starts with Windows, hidden, at one address worth pinning, and idles at 430MB instead of 1.5GB because the speech models wait until they are wanted. The major number is the point: she stopped being something he starts. Booting her from a clean environment is also what found the effort bug that would have made every turn a 400. |
+| 2.0.1 | The pinned tab actually survives being reloaded. A fixed address and a page that threw its key away were two halves of this release contradicting each other. |

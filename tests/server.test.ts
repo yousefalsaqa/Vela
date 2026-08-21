@@ -376,9 +376,36 @@ describe("the hub's door", () => {
     assert.equal(res.status, 200);
   });
 
-  test("a wrong key in the query is still a locked door", async () => {
-    assert.equal((await fetch(at("/?k=not-the-token"))).status, 401);
-    assert.equal((await fetch(at("/"))).status, 401);
+  test("the page itself opens without a key, which is what lets a pinned tab reload", async () => {
+    // It strips ?k= from the address bar as its first act, so every reload
+    // after the first arrives bare. Behind the gate that is a dead tab, and a
+    // tab he pinned is the entire point of a fixed address.
+    const res = await fetch(at("/"));
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /<title>Vela<\/title>/);
+  });
+
+  test("the page carries no key of its own, so serving it gives nothing away", async () => {
+    const body = await (await fetch(at("/"))).text();
+    assert.equal(body.includes(running.endpoint.token), false, "the page must ask for the key, not hold it");
+  });
+
+  test("an open door to the page is not an open door to her", async () => {
+    // The only thing that changed is who may read the HTML. Everything that
+    // carries anything of his stays shut.
+    for (const path of ["/health", "/events", "/screen", "/screen/file"]) {
+      assert.equal((await fetch(at(path))).status, 401, path);
+    }
+    const turn = await fetch(at("/turn"), {
+      method: "POST",
+      body: JSON.stringify({ text: "let me in" }),
+    });
+    assert.equal(turn.status, 401);
+    assert.deepEqual(fake.sent, [], "an unauthenticated turn must never reach her");
+  });
+
+  test("a wrong key is still a locked door", async () => {
+    assert.equal((await fetch(at("/health?k=not-the-token"))).status, 401);
   });
 
   test("the query token opens the event stream, which is the whole point", async () => {
