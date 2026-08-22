@@ -408,11 +408,15 @@ guards nothing. Everything else her pages might reference has to be inlined,
 which is the point rather than a limitation — one file, no build step, same
 as the hub itself.
 
-A screen survives a hub reload (`GET /screen` restores it) but not a service
-restart: it is conversational ephemera, cleared the same way the session is.
-The × on the stage only puts it away locally — a chip in the strip brings it
-back — because him tidying his window is not the same act as her striking
-the set.
+**A screen is part of a conversation, and conversations end.** Reloading the
+hub keeps it, because refreshing is not the same act as being finished with
+it. The × takes it down everywhere, not just in that tab: it used to hide
+locally, which meant the next page to open asked what was up and got back the
+thing he had just closed. And a screen is only restored to a page opening
+within `RESTORE_WITHIN_MS` (30 minutes) — otherwise the turbofan he looked at
+this morning is still there tonight, and every time he opens her he is greeted
+by the last thing she happened to show, which reads as her not having moved
+on.
 
 ## Pauses
 
@@ -905,3 +909,4 @@ you add to this list, bump it.
 | 2.0.1 | The pinned tab actually survives being reloaded. A fixed address and a page that threw its key away were two halves of this release contradicting each other. |
 | 3.0.0 | A room instead of a page, and eyes. The hub stopped being a chat window with her bolted to the side: her presence is the ground, the stage takes the floor when she has something to show, and on a phone she is a different body rather than a squeezed desk. `capture_screen` lets her look at what is actually on his monitors. Her markdown stopped being read out loud. |
 | 3.0.1 | A turn that only promised to do something gets handed back to her, so "give me a second" stops being where the work ends. |
+| 3.0.2 | A screen she showed stops following him around: closing it closes it everywhere, and one he left this morning is not put back in front of him tonight. |

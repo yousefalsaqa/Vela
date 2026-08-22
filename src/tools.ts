@@ -220,7 +220,13 @@ export const velaToolDefs = [
         "#f5b95f. To make it interactive, have elements call " +
         "parent.postMessage({ vela: 'what he did, in words' }, '*') — that " +
         "reaches you as a turn, so phrase it as words you want in your ear " +
-        "('he clicked sensor 9, HPC outlet temperature'), not as data. An " +
+        "('he clicked sensor 9, HPC outlet temperature'), not as data. If you " +
+        "invite a click, everything that looks clickable has to be: a table " +
+        "of the same things the diagram marks is the first place he will try, " +
+        "and finding it dead reads as the page being broken. Make the hit " +
+        "target real, too — an SVG <g> is measured including its label, so " +
+        "its centre is often empty canvas; put the handler on a filled shape " +
+        "or lay an invisible rect over the area. An " +
         ".svg, image or .pdf that already exists can go up directly. With " +
         "something on the screen, keep the spoken reply short; the screen " +
         "carries the detail.",

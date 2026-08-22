@@ -10,6 +10,8 @@ import {
   onScreen,
   contentTypeFor,
   publicScreen,
+  worthRestoring,
+  RESTORE_WITHIN_MS,
   type ScreenMeta,
 } from "../src/screen.js";
 
@@ -141,6 +143,32 @@ describe("publicScreen", () => {
 
   test("passes null through", () => {
     assert.equal(publicScreen(null), null);
+  });
+});
+
+describe("worthRestoring", () => {
+  test("a screen from this conversation goes back up", () => {
+    clear();
+    present({ title: "Now", path: page("now.html") });
+    assert.equal(worthRestoring(current()), true);
+  });
+
+  test("one from hours ago does not, because she has moved on", () => {
+    // Otherwise every time he opens her he is greeted by the last thing she
+    // happened to show, which reads as her being stuck on it.
+    clear();
+    present({ title: "Then", path: page("then.html") });
+    const old = { ...current()!, shownAt: Date.now() - RESTORE_WITHIN_MS - 1 };
+    assert.equal(worthRestoring(old), false);
+  });
+
+  test("nothing up is nothing to restore", () => {
+    clear();
+    assert.equal(worthRestoring(null), false);
+  });
+
+  test("the window is long enough to survive a reload mid-discussion", () => {
+    assert.ok(RESTORE_WITHIN_MS >= 15 * 60_000, "closing his tab for lunch should not lose it");
   });
 });
 

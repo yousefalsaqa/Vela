@@ -130,21 +130,6 @@ body[data-state="lost"] .state { color: var(--wrong); }
 .doing.on { opacity: 1; }
 
 .railkeys { margin-left: auto; display: flex; align-items: center; gap: .55rem; flex: 0 0 auto; }
-.chip {
-  border: 0;
-  background: none;
-  padding: .2rem 0;
-  cursor: pointer;
-  font: 500 .62rem/1 var(--mono);
-  letter-spacing: .2em;
-  text-transform: uppercase;
-  color: var(--gold);
-  max-width: 42vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chip[hidden] { display: none; }
 .probe {
   font: 400 .6rem/1 var(--mono);
   color: var(--faint);
@@ -535,7 +520,6 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
     <p class="state" id="state">connecting</p>
     <p class="doing" id="doing"></p>
     <div class="railkeys">
-      <button type="button" class="chip" id="chip" hidden></button>
       <span class="probe" id="probe" hidden></span>
     </div>
   </header>
@@ -597,7 +581,7 @@ const $ = (id) => document.getElementById(id);
 const thread = $("thread"), stateEl = $("state"), doingEl = $("doing"), lockedEl = $("locked");
 const dock = $("dock"), text = $("text"), micKey = $("mic"), earKey = $("ear"), sendKey = $("send");
 const stage = $("stage"), stageTitle = $("stageTitle"), stageNote = $("stageNote");
-const stageFrame = $("stageFrame"), stageShut = $("stageShut"), chip = $("chip"), probe = $("probe");
+const stageFrame = $("stageFrame"), stageShut = $("stageShut"), probe = $("probe");
 const pull = $("pull");
 
 const A = window.anime || null;
@@ -1152,17 +1136,14 @@ function showScreen(meta, quiet) {
   if (!screenUp) {
     stageFrame.removeAttribute("src");
     document.body.removeAttribute("data-stage");
-    chip.hidden = true;
     stageHidden = false;
     posture();
     return;
   }
   stageTitle.textContent = screenUp.title;
   stageNote.textContent = screenUp.note || "";
-  chip.textContent = screenUp.title;
   stageFrame.src = "/screen/file?s=" + encodeURIComponent(screenUp.s || "");
   stageHidden = false;
-  chip.hidden = true;
   document.body.dataset.stage = "on";
   if (phone()) memory(false);
   posture();
@@ -1170,16 +1151,21 @@ function showScreen(meta, quiet) {
   if (!quiet) follow();
 }
 
-/* His gesture only. What she is showing stays shown, one word away. */
+/* Put it away, here and everywhere.
+ *
+ * It used to hide locally and leave it standing on the service, so the next
+ * page to open asked what was up and got the thing he had just closed. Closing
+ * something twice is not a gesture anyone should have to make. */
 function stageAway() {
   stageHidden = true;
   document.body.removeAttribute("data-stage");
-  chip.hidden = !screenUp;
   posture();
+  fetch("/screen/clear", { method: "POST", headers: auth })
+    .then(() => { screenUp = null; stageFrame.removeAttribute("src"); })
+    .catch(() => {});
 }
 
 stageShut.addEventListener("click", stageAway);
-chip.addEventListener("click", () => { if (screenUp) showScreen(screenUp, true); });
 
 /* What he does on her page comes back as words. Only from the stage's own
    window, only a string, and never more than a sentence's worth. */

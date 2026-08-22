@@ -4,7 +4,7 @@ import { writeFileSync, rmSync, readFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CoreEvent } from "./core.js";
-import { current, contentTypeFor, type Screen } from "./screen.js";
+import { current, clear, worthRestoring, contentTypeFor, type Screen } from "./screen.js";
 
 /**
  * Vela as a local service, so she outlives the window you started her from and
@@ -155,6 +155,19 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
   const mintScreenToken = () => (screenToken = randomBytes(24).toString("hex"));
 
   /**
+   * Take it down for everyone.
+   *
+   * Injected state means a test drives the screen itself, so this only calls
+   * the real module when it is the real module. Either way the key goes: a
+   * page that is no longer showing anything has no business holding a key to
+   * the file it was showing.
+   */
+  const dropScreen = () => {
+    if (!opts.screen) clear();
+    screenToken = null;
+  };
+
+  /**
    * The token, from either door.
    *
    * A browser can set a header on fetch but not on a plain navigation, and
@@ -253,8 +266,24 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
     // What is up right now, for a hub that just loaded or reloaded. The
     // title, the note and the screen's key — never the path: his filesystem
     // layout stays on his machine.
+    // He put it away. That is the end of it, not a thing this tab forgets and
+    // the next one asks about again.
+    if (req.method === "POST" && path === "/screen/clear") {
+      dropScreen();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ screen: null }));
+      return;
+    }
+
     if (req.method === "GET" && path === "/screen") {
-      const shown = screenState();
+      let shown = screenState();
+      // A page opening now gets what she is showing, not what she was showing
+      // this morning. Old enough and it is taken down rather than hidden, so
+      // every face agrees about what is up.
+      if (shown && !worthRestoring(shown)) {
+        dropScreen();
+        shown = null;
+      }
       if (shown && !screenToken) mintScreenToken(); // shown before anyone looked
       res.writeHead(200, { "content-type": "application/json" });
       res.end(

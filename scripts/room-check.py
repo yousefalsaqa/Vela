@@ -195,18 +195,28 @@ with sync_playwright() as p:
           page.evaluate("document.body.dataset.stage") == "on")
     page.screenshot(path=str(here / "s-stage-talk.png"))
 
-    page.locator("#stageShut").click()
-    time.sleep(0.4)
-    check("dismissing keeps it, one word away", page.locator("#chip").is_visible())
-    check("and gives her the room back", page.evaluate("want.r") > 0.2)
-    page.locator("#chip").click()
-    time.sleep(0.4)
-    check("the chip brings it back", page.evaluate("document.body.dataset.stage") == "on")
-
+    # Reloading mid-discussion keeps it: he did not put it away, he refreshed.
     page.reload()
     page.wait_for_load_state("networkidle")
     time.sleep(0.8)
     check("a reload restores what she had up", page.evaluate("document.body.dataset.stage") == "on")
+
+    # Putting it away is the end of it. It used to hide in this tab only, so
+    # the next page to open asked what was up and got back the thing he had
+    # just closed — which is what "why is it still there every time" was.
+    page.locator("#stageShut").click()
+    time.sleep(0.6)
+    check("putting it away takes it off the stage", page.evaluate("document.body.dataset.stage") is None)
+    check("and gives her the room back", page.evaluate("want.r") > 0.2)
+    page.reload()
+    page.wait_for_load_state("networkidle")
+    time.sleep(0.8)
+    check("and it stays gone when he opens her again",
+          page.evaluate("document.body.dataset.stage") is None)
+
+    # Put it back for the checks below, which need something on the stage.
+    push({"screen": "on"})
+    time.sleep(0.8)
 
     # ── trouble ───────────────────────────────────────────────────────────
     push({"type": "error", "message": "API Error: 400 something went wrong upstream"})

@@ -717,7 +717,7 @@ describe("the screen, served", () => {
   const put = (name: string, body = "<p>engine</p>") => {
     const path = join(dir, name);
     writeFileSync(path, body, "utf8");
-    shown = { id: "ab12cd34", title: "The engine", path, shownAt: 7, note: "stations 2 to 5" };
+    shown = { id: "ab12cd34", title: "The engine", path, shownAt: Date.now(), note: "stations 2 to 5" };
   };
 
   test("/screen is null when nothing is up", async () => {
@@ -737,7 +737,7 @@ describe("the screen, served", () => {
   test("a screen with no note has no note key, rather than a null one", async () => {
     const path = join(dir, "plain.html");
     writeFileSync(path, "<p>x</p>", "utf8");
-    shown = { id: "0011aabb", title: "Plain", path, shownAt: 3 };
+    shown = { id: "0011aabb", title: "Plain", path, shownAt: Date.now() };
     const { screen } = await meta();
     assert.equal("note" in (screen ?? {}), false);
   });
@@ -747,7 +747,7 @@ describe("the screen, served", () => {
     // injected state at face value rather than crashing on it.
     const path = join(dir, "raw.bin");
     writeFileSync(path, "bytes", "utf8");
-    shown = { id: "0011aabb", title: "Raw", path, shownAt: 4 };
+    shown = { id: "0011aabb", title: "Raw", path, shownAt: Date.now() };
     const { screen } = await meta();
     const res = await fetch(at(`/screen/file?s=${screen!.s}`));
     assert.equal(res.status, 200);
@@ -837,6 +837,29 @@ describe("the screen, served", () => {
     put("engine.html");
     await meta();
     assert.equal((await fetch(at("/screen/file?s="))).status, 401);
+  });
+
+  test("putting it away puts it away everywhere, not just in that tab", async () => {
+    // It used to hide locally, so the next page to open asked what was up and
+    // got back the thing he had just closed.
+    put("engine.html");
+    const s = (await meta()).screen!.s;
+    const res = await fetch(at("/screen/clear"), { method: "POST", ...master() });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { screen: null });
+    assert.equal((await fetch(at(`/screen/file?s=${s}`))).status, 401, "the key goes with it");
+  });
+
+  test("clearing needs the token like everything else", async () => {
+    put("engine.html");
+    assert.equal((await fetch(at("/screen/clear"), { method: "POST" })).status, 401);
+  });
+
+  test("a screen from hours ago is not put back in front of him", async () => {
+    const path = join(dir, "stale.html");
+    writeFileSync(path, "<p>old</p>", "utf8");
+    shown = { id: "aa11bb22", title: "This morning", path, shownAt: Date.now() - 4 * 60 * 60_000 };
+    assert.deepEqual(await meta(), { screen: null });
   });
 
   test("the master token still reads the file, for debugging with curl", async () => {

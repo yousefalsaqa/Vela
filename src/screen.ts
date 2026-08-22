@@ -119,6 +119,24 @@ export function current(): Screen | null {
   return shown;
 }
 
+/**
+ * How long a screen is worth restoring to a page that has just opened.
+ *
+ * A screen is part of a conversation, and conversations end. Without this the
+ * turbofan he looked at this morning is still there tonight, and every time he
+ * opens her he is greeted by the last thing she happened to show — which reads
+ * as her not having moved on.
+ *
+ * Only the restore is aged. A tab that has been sitting open with it all
+ * afternoon keeps it, because he can see it and has not put it away.
+ */
+export const RESTORE_WITHIN_MS = 30 * 60_000;
+
+/** Is this worth putting back in front of him, or has it had its moment? */
+export function worthRestoring(screen: Screen | null, now = Date.now()): boolean {
+  return Boolean(screen) && now - screen!.shownAt < RESTORE_WITHIN_MS;
+}
+
 /** Hear about every change. Returns an unsubscribe function, like core.subscribe. */
 export function onScreen(listener: ScreenListener): () => void {
   listeners.add(listener);
