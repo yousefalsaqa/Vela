@@ -6,6 +6,8 @@ import { join } from "node:path";
 import {
   createCore,
   sessionOptions,
+  endedOnAPromise,
+  UNFINISHED,
   type CoreEvent,
   type Session,
 } from "../src/core.js";
@@ -327,6 +329,81 @@ describe("createCore", () => {
     });
   });
 
+  describe("a turn that only promised", () => {
+    const promise = "I'll fetch a real diagram and put it up. Give me a second.";
+
+    test("is handed straight back to her, so the work actually starts", async () => {
+      const core = build();
+      core.send("can you put up a diagram");
+      await until(() => script.sent.length === 1, "the turn to reach the session");
+      script.emit(text(promise));
+      script.emit(result(2100));
+      await until(() => script.sent.length === 2, "the note to go back");
+      assert.equal(script.sent[1], UNFINISHED);
+      core.stop();
+    });
+
+    test("stays busy across it, so the heartbeat does not cut in", async () => {
+      // From his side this is still one turn: she is going to answer him.
+      const core = build();
+      core.send("can you put up a diagram");
+      await until(() => script.sent.length === 1, "the turn");
+      script.emit(text(promise));
+      script.emit(result(2100));
+      await until(() => script.sent.length === 2, "the note");
+      assert.equal(core.isBusy(), true, "an interjection here would talk over her");
+      core.stop();
+    });
+
+    test("happens once, because a second one would be a loop", async () => {
+      const core = build();
+      core.send("can you put up a diagram");
+      await until(() => script.sent.length === 1, "the turn");
+      script.emit(text(promise));
+      script.emit(result(2100));
+      await until(() => script.sent.length === 2, "the note");
+
+      // She promises again. Handing it back for ever would be worse than the
+      // habit it is fixing.
+      script.emit(text(promise));
+      script.emit(result(2100));
+      await new Promise((r) => setImmediate(r));
+      assert.equal(script.sent.length, 2, "a stubborn turn must be allowed to end");
+      core.stop();
+    });
+
+    test("a turn that did the work is left alone", async () => {
+      const core = build();
+      core.send("put up a diagram");
+      await until(() => script.sent.length === 1, "the turn");
+      script.emit(toolUse("Read", { file_path: "C:/a/b.png" }));
+      script.emit(text(promise));
+      script.emit(result(2100));
+      await new Promise((r) => setImmediate(r));
+      assert.equal(script.sent.length, 1, "she ran something, so she was working");
+      core.stop();
+    });
+
+    test("the next thing he says gets its own chance to be nudged", async () => {
+      const core = build();
+      core.send("one");
+      await until(() => script.sent.length === 1, "the first turn");
+      script.emit(text(promise));
+      script.emit(result(100));
+      await until(() => script.sent.length === 2, "the first note");
+
+      script.emit(text("Right, done."));
+      script.emit(result(100));
+      core.send("two");
+      await until(() => script.sent.length === 3, "the second turn");
+      script.emit(text(promise));
+      script.emit(result(100));
+      await until(() => script.sent.length === 4, "the second note");
+      assert.equal(script.sent[3], UNFINISHED);
+      core.stop();
+    });
+  });
+
   describe("the screen", () => {
     // The screen module is process-global, which is the point: the tool
     // handler and the core share it. These tests share it with them too.
@@ -413,6 +490,57 @@ describe("createCore", () => {
       await new Promise((r) => setImmediate(r));
       assert.deepEqual(events, []);
     });
+  });
+});
+
+describe("endedOnAPromise", () => {
+  // The real one, off his screen. She said it, ran nothing, and stopped.
+  const real = "I'll fetch a real diagram rather than draw one from memory, then put it up. Give me a second.";
+
+  test("catches the turn that stopped at the promise", () => {
+    assert.equal(endedOnAPromise(real, 0), true);
+  });
+
+  test("the same words are fine once something actually ran", () => {
+    // Narrating while working is a different complaint, and not this one's.
+    assert.equal(endedOnAPromise(real, 3), false);
+  });
+
+  test("catches the ways she says it", () => {
+    for (const said of [
+      "I'll grab that and put it on the screen.",
+      "Let me look at the repo first.",
+      "Hang on.",
+      "Two seconds.",
+      "I'm going to check the log.",
+      "Bear with me.",
+    ]) {
+      assert.equal(endedOnAPromise(said, 0), true, said);
+    }
+  });
+
+  test("a finished answer is left alone, however it ends", () => {
+    // False positives are the expensive half: a nudge here talks over a turn
+    // that was already complete, and she answers a question nobody asked.
+    for (const said of [
+      "Sensor 9 is the one drifting, about four degrees over eighty cycles.",
+      "Right here.",
+      "No, that dataset is FD001 through FD004.",
+      "Renamed it, tests pass.",
+      "I'll remember that.",
+      "Done. Twelve of them were stale.",
+      "",
+    ]) {
+      assert.equal(endedOnAPromise(said, 0), false, said);
+    }
+  });
+
+  test("only the end of a reply counts", () => {
+    // She often says what she is about to do and then does it inside the same
+    // turn; what is broken is stopping there.
+    const narrated =
+      "Let me check the log. " + "x".repeat(300) + " Twelve entries, all from Tuesday.";
+    assert.equal(endedOnAPromise(narrated, 0), false);
   });
 });
 

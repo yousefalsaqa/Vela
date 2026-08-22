@@ -107,6 +107,41 @@ export function sessionOptions(opts: CoreOptions): Record<string, unknown> {
   };
 }
 
+/**
+ * A turn that stopped at the promise.
+ *
+ * "I'll fetch a real diagram, then put it up. Give me a second." reads like
+ * work starting. It is the end: a turn is over the moment she stops writing,
+ * there is no second, and he is left watching a finished reply for something
+ * that will never begin.
+ *
+ * Prose alone does not fix it, because from inside the turn the sentence is
+ * true when she writes it. What gives it away is that nothing ran — the whole
+ * reply is an intention with no tool call under it. That pair is checkable,
+ * so it is checked here rather than hoped for in the prompt.
+ */
+const PROMISE =
+  /\b(?:i(?:'|’)?ll|i will|let me|going to|gonna)\s+(?:go\s+|just\s+|quickly\s+)?(?:fetch|grab|get|find|look|check|pull|put|make|draw|build|write|run|read|search|dig|see|have a look)\b|\bgive me (?:a|one) (?:sec|second|moment|minute)\b|\b(?:one|two) (?:sec|secs|second|seconds|moment)\b|\bhang on\b|\bbear with me\b|\bstand by\b/i;
+
+/**
+ * Did she finish, or only say she would?
+ *
+ * Only the tail is looked at: "I'll check the log" in the middle of a reply
+ * that then checks the log is her narrating, which is a different complaint.
+ * At the end, with nothing having run, it is a turn that did not happen.
+ */
+export function endedOnAPromise(said: string, toolsUsed: number): boolean {
+  if (toolsUsed > 0) return false;
+  const tail = said.trim().slice(-180);
+  return tail.length > 0 && PROMISE.test(tail);
+}
+
+/** What she is told when she does it. Phrased as the fact, not a telling-off. */
+export const UNFINISHED =
+  "[That turn ended where it started: you said you were about to do " +
+  "something and then nothing ran, so he is looking at a promise. Do it now, " +
+  "and tell him what happened rather than what is about to.]";
+
 export function createCore(opts: CoreOptions): Core {
   const store = opts.store ?? defaultStore();
   const listeners = new Set<Listener>();
@@ -129,6 +164,10 @@ export function createCore(opts: CoreOptions): Core {
   let busy = false;
   let streamedThisTurn = false;
   let stopped = false;
+  // Enough of the turn to tell whether it actually happened.
+  let saidThisTurn = "";
+  let toolsThisTurn = 0;
+  let pushedThisTurn = false;
 
   // One pump for the life of the session, rather than a loop per turn.
   const pump = (async () => {
@@ -137,11 +176,15 @@ export function createCore(opts: CoreOptions): Core {
         if (stopped) break;
 
         const lines = toolActivity(msg);
-        if (lines.length) emit({ type: "activity", lines });
+        if (lines.length) {
+          toolsThisTurn += lines.length;
+          emit({ type: "activity", lines });
+        }
 
         const delta = streamedText(msg);
         if (delta !== null && delta !== "") {
           streamedThisTurn = true;
+          saidThisTurn += delta;
           emit({ type: "delta", text: delta });
         }
 
@@ -153,7 +196,19 @@ export function createCore(opts: CoreOptions): Core {
             ms: m.duration_ms ?? 0,
             ...(streamedThisTurn ? {} : { text: m.result }),
           });
+
+          const said = streamedThisTurn ? saidThisTurn : m.result ?? "";
+          // Once per turn. Handing the note back to a turn that was itself
+          // the note would be a loop, and a stubborn one.
+          const owed = !pushedThisTurn && endedOnAPromise(said, toolsThisTurn);
           streamedThisTurn = false;
+          saidThisTurn = "";
+          toolsThisTurn = 0;
+          if (owed) {
+            pushedThisTurn = true;
+            busy = true;
+            turns.send(UNFINISHED);
+          }
         }
       }
     } catch (err) {
@@ -190,6 +245,10 @@ export function createCore(opts: CoreOptions): Core {
       if (stopped) return;
       busy = true;
       streamedThisTurn = false;
+      saidThisTurn = "";
+      toolsThisTurn = 0;
+      // A turn he started is allowed its own one nudge.
+      pushedThisTurn = false;
       turns.send(text);
     },
 

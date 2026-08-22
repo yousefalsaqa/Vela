@@ -792,6 +792,22 @@ session start. Small and always-on beats a retrieval step that might miss.
 When memory outgrows that, add embedding search and keep only pinned facts in
 the block.
 
+**A turn that only promised is handed straight back.** She had a habit of
+answering "I'll fetch a real diagram and put it up, give me a second" and then
+stopping — which ends the turn, because a turn ends the moment she stops
+writing. There is no second, and he is left watching a finished reply for work
+that never starts.
+
+Prose alone did not fix it, because from inside the turn the sentence is true
+when she writes it. What gives it away is the pair: the reply ends on an
+intention *and* nothing ran. `endedOnAPromise()` in [core.ts](src/core.ts)
+checks exactly that, and the core sends `UNFINISHED` back into the same turn,
+the same way `CUT_OFF` tells her she was talked over. It fires once — a second
+one would be a loop — it keeps her marked busy so the heartbeat doesn't cut in,
+and it only looks at the tail of the reply, because narrating and then doing
+the work is a different complaint. A turn with a tool call in it is never
+touched.
+
 **Thinking off has to carry an effort with it.** Claude Code's own
 `settings.json` holds an `effortLevel`, the SDK inherits it, and `xhigh` with
 thinking disabled is refused outright: every turn comes back as `API Error:
@@ -888,3 +904,4 @@ you add to this list, bump it.
 | 2.0.0 | Always on. She starts with Windows, hidden, at one address worth pinning, and idles at 430MB instead of 1.5GB because the speech models wait until they are wanted. The major number is the point: she stopped being something he starts. Booting her from a clean environment is also what found the effort bug that would have made every turn a 400. |
 | 2.0.1 | The pinned tab actually survives being reloaded. A fixed address and a page that threw its key away were two halves of this release contradicting each other. |
 | 3.0.0 | A room instead of a page, and eyes. The hub stopped being a chat window with her bolted to the side: her presence is the ground, the stage takes the floor when she has something to show, and on a phone she is a different body rather than a squeezed desk. `capture_screen` lets her look at what is actually on his monitors. Her markdown stopped being read out loud. |
+| 3.0.1 | A turn that only promised to do something gets handed back to her, so "give me a second" stops being where the work ends. |
