@@ -68,12 +68,6 @@ body {
 
 /* Her presence is the ground everything else stands on, not a widget in a
    corner. It is painted from real amplitude and real activity; see draw(). */
-#field {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-}
 
 .room {
   position: relative;
@@ -142,13 +136,13 @@ body[data-state="lost"] .state { color: var(--wrong); }
    material takes the right and she steps in behind the words. */
 .floor {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 52ch) minmax(0, 1fr);
-  gap: var(--pad);
   padding: 0 var(--pad);
   min-height: 0;
 }
-body[data-stage="on"] .floor { grid-template-columns: minmax(0, 34ch) minmax(0, 1fr); }
+/* The conversation is the base layer, not a window to be managed. It keeps
+   the left of the desk and the panels float over the rest of it. */
+.thread { max-width: 52ch; }
+body[data-stage="on"] .thread { max-width: 40ch; }
 
 /* ── what was said ────────────────────────────────────────────────────────
    Bottom-aligned, so the newest thing sits where the eye already is and the
@@ -276,45 +270,123 @@ body[data-stage="on"] .floor { grid-template-columns: minmax(0, 34ch) minmax(0, 
 .locked code { color: var(--cyan); font-size: .95em; }
 .locked[hidden] { display: none; }
 
-/* ── the stage ────────────────────────────────────────────────────────────
-   What she pulled onto the bench between us. It takes the room; it is not a
-   card sitting on top of one, so it has a hairline and no border of its own. */
-.stage {
-  min-width: 0;
+/* ── panels ───────────────────────────────────────────────────────────────
+   Two things float on the desk: what she is showing, and what she is doing.
+   He puts them where he wants them and they stay there.
+
+   Not windows in the operating-system sense — no title bar, no buttons, no
+   shadow. A hairline, a name, and a corner. The name is the handle, because
+   a panel that needs a separate strip to drag by is a panel wearing chrome.
+*/
+.panel {
+  position: absolute;
+  z-index: 2;
   display: none;
   grid-template-rows: auto minmax(0, 1fr);
-  padding-bottom: 1rem;
+  min-width: 14rem;
+  min-height: 6rem;
+  background: rgba(6, 11, 16, .93);
+  border: 1px solid var(--hair);
+  backdrop-filter: blur(3px);
 }
-body[data-stage="on"] .stage { display: grid; }
-.stage header {
+.panel.up { z-index: 3; }
+.panel > header {
   display: flex;
   align-items: baseline;
-  gap: .8rem;
-  padding: 1.5rem 0 .7rem;
+  gap: .7rem;
+  padding: .5rem .7rem;
   border-bottom: 1px solid var(--hair);
+  cursor: grab;
+  user-select: none;
   min-width: 0;
 }
-.stage h2 { margin: 0; font: 400 1.15rem/1.3 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stage .note {
+.panel > header:active { cursor: grabbing; }
+.panel h2 {
   margin: 0;
-  font: 400 .64rem/1.4 var(--mono);
+  font: 400 .95rem/1.3 var(--serif);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel .note {
+  margin: 0;
+  min-width: 0;
+  font: 400 .62rem/1.4 var(--mono);
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
-.stage .shut {
+.panel .shut {
   margin-left: auto;
   flex: 0 0 auto;
   border: 0;
   background: none;
-  padding: .1rem .3rem;
+  padding: 0 .2rem;
   cursor: pointer;
   color: var(--faint);
-  font: 400 1rem/1 var(--mono);
+  font: 400 .95rem/1 var(--mono);
 }
-.stage .shut:hover { color: var(--ink); }
+.panel .shut:hover { color: var(--ink); }
+/* The corner. Two hairlines, which is enough to say "pull me". */
+.grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(to top left, transparent 45%, var(--hair) 45%, var(--hair) 55%, transparent 55%),
+    linear-gradient(to top left, transparent 65%, var(--hair) 65%, var(--hair) 72%, transparent 72%);
+}
+/* While a panel is being dragged the iframe below would swallow the pointer,
+   and the drag would stop dead the moment it crossed her screen. */
+.shield {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: none;
+  cursor: grabbing;
+}
+body.dragging .shield { display: block; }
+
+/* ── the work, while it is happening ──────────────────────────────────────
+   One dim line in the rail is right for a turn that reads a file and answers.
+   It is useless for watching her build something, which is the case where he
+   actually wants to see the machine work: which file, which command, how far
+   in. Nothing here is invented — one line per real tool. */
+body[data-state="working"] .panel.works { display: grid; }
+.works ul {
+  margin: 0;
+  padding: .5rem .7rem;
+  list-style: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: .28rem;
+  font: 400 .66rem/1.5 var(--mono);
+  color: var(--faint);
+}
+.works ul::-webkit-scrollbar { width: 0; }
+.works li {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: .4;
+  transition: opacity .5s var(--ease), color .5s var(--ease);
+}
+/* The one she is on. Older steps are still there, just no longer the point. */
+.works li:last-child { opacity: 1; color: var(--dim); }
+/* Reading is noise; changing something is the thing he is watching for. */
+.works li.made { color: var(--cyan); opacity: .85; }
+.works li.made:last-child { opacity: 1; }
+.works li::before { content: attr(data-verb) " "; color: var(--faint); }
+
+/* ── the stage ────────────────────────────────────────────────────────────
+   What she pulled onto the bench between us. */
+body[data-stage="on"] .panel.stage { display: grid; }
 .stage iframe { width: 100%; height: 100%; border: 0; background: transparent; display: block; }
 
 /* ── the dock ─────────────────────────────────────────────────────────────
@@ -330,6 +402,22 @@ body[data-stage="on"] .stage { display: grid; }
   transition: border-color .4s var(--ease);
 }
 body[data-typing="on"] .dock { border-top-color: rgba(79, 209, 219, .38); }
+/* Two pixels of truth: is the microphone hearing him, is she making sound.
+   Sits on the dock's own rule, so it costs no space at all. */
+.level {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 2px;
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: left;
+  opacity: .5;
+  pointer-events: none;
+}
+body[data-state="speaking"] .level { background: var(--gold); }
+.dock { position: relative; }
 .dock::before {
   content: "›";
   color: var(--faint);
@@ -437,6 +525,21 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
   body[data-memory="on"] .fill { display: none; }
   body[data-memory="on"] .turn.past { display: block; }
 
+  /* No desk to arrange on a phone. Panels fill the space they are given and
+     stay where they are put by the layout, not by his thumb. */
+  .panel {
+    position: static;
+    width: auto !important;
+    height: auto !important;
+    border: 0;
+    background: none;
+    backdrop-filter: none;
+  }
+  .panel.stage { height: 100% !important; }
+  .panel > header { padding-left: 0; padding-right: 0; cursor: default; }
+  .grip { display: none; }
+  body[data-state="working"] .panel.works { max-height: 34dvh; }
+
   /* Shown on a phone, the material is the interface — but not a silent one.
      Her latest line lies along the bottom of it, over a fade so the diagram
      still reads underneath, and taps pass straight through to the thing she
@@ -512,8 +615,6 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
 </head>
 <body data-state="idle">
 
-<canvas id="field" aria-hidden="true"></canvas>
-
 <div class="room">
   <header class="rail">
     <h1 class="mark">V<em>e</em>la</h1>
@@ -530,17 +631,27 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
       <div class="locked" id="locked" hidden></div>
     </div>
 
-    <section class="stage" id="stage" aria-label="What she is showing">
+    <section class="panel works" id="worksPanel" data-panel="works" aria-hidden="true">
+      <header><h2>Work</h2><p class="note" id="worksCount"></p></header>
+      <ul id="works"></ul>
+      <span class="grip" data-grip></span>
+    </section>
+
+    <section class="panel stage" id="stage" data-panel="stage" aria-label="What she is showing">
       <header>
         <h2 id="stageTitle"></h2>
         <p class="note" id="stageNote"></p>
         <button type="button" class="shut" id="stageShut" title="Put it away" aria-label="Put it away">×</button>
       </header>
       <iframe id="stageFrame" sandbox="allow-scripts" title="What she is showing"></iframe>
+      <span class="grip" data-grip></span>
     </section>
   </div>
 
+  <div class="shield" id="shield"></div>
+
   <form class="dock" id="dock">
+    <span class="level" id="level" aria-hidden="true"></span>
     <button type="button" class="pull" id="pull" aria-label="Show what was said">memory</button>
     <textarea id="text" rows="1" placeholder="" autocomplete="off" spellcheck="false" aria-label="Say something"></textarea>
     <button type="submit" class="key send" id="send">send</button>
@@ -582,6 +693,8 @@ const thread = $("thread"), stateEl = $("state"), doingEl = $("doing"), lockedEl
 const dock = $("dock"), text = $("text"), micKey = $("mic"), earKey = $("ear"), sendKey = $("send");
 const stage = $("stage"), stageTitle = $("stageTitle"), stageNote = $("stageNote");
 const stageFrame = $("stageFrame"), stageShut = $("stageShut"), probe = $("probe");
+const works = $("works"), worksPanel = $("worksPanel"), worksCount = $("worksCount");
+const level = $("level"), shield = $("shield");
 const pull = $("pull");
 
 const A = window.anime || null;
@@ -589,193 +702,162 @@ const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const animate = (t, o) => (A && !still ? A.animate(t, o) : null);
 const phone = () => matchMedia("(max-width: 860px)").matches;
 
-/* Declared up here because her posture depends on them and the first paint
-   happens before the stage section below has run. */
+/* What is on the stage, and whether he has put it away. */
 let screenUp = null, stageHidden = false;
 
 /* ════════════════════════════════════════════════════════════════════════
-   HER PRESENCE
+   The desk
 
-   The whole viewport is the field she is in, so this is painted behind
-   everything rather than parked in a corner. Every number it draws with comes
-   from something real: the amplitude of whoever is actually making noise, the
-   tool calls she actually made, the state she is actually in.
+   Two panels float on it, and where he puts them is where they stay. Not a
+   window manager: no title bars, no minimise, no z-order to think about. A
+   panel is a hairline round something, its name is the handle, and the
+   corner pulls. What it costs is one remembered rectangle each.
 
-   It holds still when she is idle, and it means it — the loop stops rather
-   than repainting a still image sixty times a second. She lives on a second
-   monitor all day, and motion that carries nothing is worse than nothing: it
-   costs him a core and tells him what he already knew.
+   Positions are kept per panel and per rough window size, because a layout
+   arranged on the wide monitor is wrong on the laptop and being handed the
+   wrong one is worse than being handed none.
    ════════════════════════════════════════════════════════════════════════ */
-const canvas = $("field");
-const g = canvas.getContext("2d");
-let W = 0, H = 0;
+const DESK = "vela.desk";
+const bucket = () => (innerWidth < 1200 ? "small" : innerWidth < 2000 ? "medium" : "large");
 
-const INK = [122, 146, 158];
-const CYAN = [79, 209, 219];
-const GOLD = [245, 185, 95];
-const rgba = (c, a) => "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")";
-const mix = (a, b, t) => [0, 1, 2].map((i) => a[i] + (b[i] - a[i]) * t);
+function deskRead() {
+  try { return JSON.parse(localStorage.getItem(DESK) || "{}"); } catch { return {}; }
+}
+function deskWrite(all) {
+  try { localStorage.setItem(DESK, JSON.stringify(all)); } catch { /* private window */ }
+}
 
-/* Where she is and what she is doing, as numbers the painter can read.
-   `cx`, `cy` and `r` are fractions of the viewport, so her posture survives a
-   resize; the rest are levels the state machine sets and this eases towards. */
-const her = { cx: .68, cy: .5, r: .40, energy: 0, warmth: 0, pale: 0, amp: 0, spin: 0 };
-const want = { cx: .68, cy: .5, r: .40, energy: 0, warmth: 0, pale: 0 };
-let ripples = [];
-let analyser = null, ampData = null;
-let painting = false;
+/** Where a panel goes when he has never moved it. Fractions of the desk. */
+const DEFAULTS = {
+  stage: { x: .38, y: .02, w: .60, h: .60 },
+  works: { x: .38, y: .65, w: .60, h: .33 },
+};
 
-function measure() {
-  const dpr = Math.min(devicePixelRatio || 1, 2);
-  W = innerWidth;
-  H = innerHeight;
-  canvas.width = Math.round(W * dpr);
-  canvas.height = Math.round(H * dpr);
-  canvas.style.width = W + "px";
-  canvas.style.height = H + "px";
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  posture();
-  wake();
+function place(panel) {
+  const name = panel.dataset.panel;
+  const desk = panel.parentElement.getBoundingClientRect();
+  const saved = (deskRead()[bucket()] || {})[name] || DEFAULTS[name];
+  // Kept as fractions so a resized window rearranges rather than strands a
+  // panel off the edge.
+  panel.style.left = Math.round(saved.x * desk.width) + "px";
+  panel.style.top = Math.round(saved.y * desk.height) + "px";
+  panel.style.width = Math.round(saved.w * desk.width) + "px";
+  panel.style.height = Math.round(saved.h * desk.height) + "px";
+}
+
+function remember(panel) {
+  const desk = panel.parentElement.getBoundingClientRect();
+  const all = deskRead();
+  const mine = (all[bucket()] = all[bucket()] || {});
+  mine[panel.dataset.panel] = {
+    x: parseFloat(panel.style.left) / desk.width,
+    y: parseFloat(panel.style.top) / desk.height,
+    w: parseFloat(panel.style.width) / desk.width,
+    h: parseFloat(panel.style.height) / desk.height,
+  };
+  deskWrite(all);
 }
 
 /**
- * Where she stands, given what the room is doing.
+ * Drag by the name, resize by the corner.
  *
- * One organism changing posture rather than widgets appearing: when she is
- * showing him something she moves in behind the words and gives the material
- * the floor; when nothing is happening she has the room.
+ * Pointer capture rather than mouse events, so a fast drag that leaves the
+ * panel keeps going; and a shield over everything while it runs, because her
+ * screen is an iframe and an iframe swallows the pointer the moment it
+ * crosses — the drag would stop dead halfway.
  */
-function posture() {
-  const narrow = phone();
-  if (screenUp && !stageHidden) {
-    // Showing something. Step aside and get small.
-    want.cx = narrow ? .5 : .17;
-    want.cy = narrow ? .5 : .8;
-    want.r = narrow ? .1 : .13;
-  } else if (narrow) {
-    want.cx = .5;
-    want.cy = .42;
-    want.r = .34;
-  } else {
-    // The room is hers. Tighten a little while she is actually working.
-    const busy = document.body.dataset.state === "working";
-    want.cx = busy ? .70 : .66;
-    want.cy = .5;
-    want.r = busy ? .32 : .38;
+function movable(panel) {
+  const head = panel.querySelector("header");
+  const grip = panel.querySelector(".grip");
+  if (!head || !grip) return;
+
+  const start = (e, mode) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    if (e.target.closest("button")) return;      // the × is not a handle
+    if (phone()) return;                          // stacked; nothing to arrange
+    const desk = panel.parentElement.getBoundingClientRect();
+    const box = panel.getBoundingClientRect();
+    const from = { x: e.clientX, y: e.clientY };
+    const was = { x: box.left - desk.left, y: box.top - desk.top, w: box.width, h: box.height };
+    for (const p of document.querySelectorAll(".panel")) p.classList.remove("up");
+    panel.classList.add("up");
+    document.body.classList.add("dragging");
+    // Held in a variable: currentTarget is only itself during dispatch, and by
+    // the time the pointer comes up again it is null.
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+
+    const move = (ev) => {
+      const dx = ev.clientX - from.x, dy = ev.clientY - from.y;
+      if (mode === "drag") {
+        // Never far enough off the desk that the handle cannot be reached.
+        panel.style.left = Math.max(-was.w + 80, Math.min(desk.width - 80, was.x + dx)) + "px";
+        panel.style.top = Math.max(0, Math.min(desk.height - 28, was.y + dy)) + "px";
+      } else {
+        panel.style.width = Math.max(220, was.w + dx) + "px";
+        panel.style.height = Math.max(96, was.h + dy) + "px";
+      }
+    };
+    const end = (ev) => {
+      try { handle.releasePointerCapture(ev.pointerId); } catch { /* already gone */ }
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      document.body.classList.remove("dragging");
+      remember(panel);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    e.preventDefault();
+  };
+
+  head.addEventListener("pointerdown", (e) => start(e, "drag"));
+  grip.addEventListener("pointerdown", (e) => start(e, "size"));
+  // Back where it started, for when he has dragged it somewhere silly.
+  head.addEventListener("dblclick", () => {
+    const all = deskRead();
+    if (all[bucket()]) delete all[bucket()][panel.dataset.panel];
+    deskWrite(all);
+    place(panel);
+  });
+}
+
+for (const panel of document.querySelectorAll(".panel")) {
+  place(panel);
+  movable(panel);
+}
+addEventListener("resize", () => {
+  for (const panel of document.querySelectorAll(".panel")) place(panel);
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   The level
+
+   All that is left of the audio-reactive core, and the only part of it that
+   was ever information: whether the microphone is actually hearing him, and
+   whether she is actually making sound. A line in the dock, two pixels tall,
+   present only while one of those is true.
+   ════════════════════════════════════════════════════════════════════════ */
+let analyser = null, ampData = null, metering = false;
+
+function meter() {
+  if (!analyser) {
+    metering = false;
+    level.style.transform = "scaleX(0)";
+    return;
   }
-  wake();
-}
-
-const settled = () =>
-  Math.abs(her.cx - want.cx) < .001 &&
-  Math.abs(her.cy - want.cy) < .001 &&
-  Math.abs(her.r - want.r) < .001 &&
-  Math.abs(her.energy - want.energy) < .01 &&
-  Math.abs(her.warmth - want.warmth) < .01 &&
-  Math.abs(her.pale - want.pale) < .01 &&
-  her.amp < .01;
-
-/** Anything to say? Otherwise the last frame stands and the loop stops. */
-const moving = () => Boolean(analyser) || ripples.length > 0 || !settled() || her.energy > .01;
-
-function wake() {
-  if (painting) return;
-  painting = true;
-  requestAnimationFrame(paint);
-}
-
-function paint(now) {
-  const ease = still ? 1 : .12;
-  her.cx += (want.cx - her.cx) * ease;
-  her.cy += (want.cy - her.cy) * ease;
-  her.r += (want.r - her.r) * ease;
-  her.energy += (want.energy - her.energy) * ease;
-  her.warmth += (want.warmth - her.warmth) * ease;
-  her.pale += (want.pale - her.pale) * ease;
-
+  metering = true;
+  analyser.getByteTimeDomainData(ampData);
   let peak = 0;
-  if (analyser) {
-    analyser.getByteTimeDomainData(ampData);
-    for (let i = 0; i < ampData.length; i++) peak = Math.max(peak, Math.abs(ampData[i] - 128));
-    peak = Math.min(1, peak / 70);
-  }
-  her.amp += (peak - her.amp) * .25;
-  if (!still) her.spin += .0009 + her.energy * .004;
-
-  g.clearRect(0, 0, W, H);
-
-  const cx = her.cx * W, cy = her.cy * H;
-  const R = her.r * Math.min(W, H);
-  // Cyan is work, gold is her voice, pale is his. Warmth wins, because when
-  // she is speaking that is the only thing worth saying about her.
-  const base = mix(mix(INK, CYAN, her.energy), GOLD, her.warmth);
-  const tint = mix(base, [225, 240, 246], her.pale * .5);
-  const lift = her.amp * .55 + her.energy * .18 + her.warmth * .2;
-
-  // Two quiet rims. These are the shape of her at rest and they barely exist.
-  for (let ring = 0; ring < 2; ring++) {
-    g.beginPath();
-    g.arc(cx, cy, R * (1 + ring * .34), 0, Math.PI * 2);
-    g.strokeStyle = rgba(tint, (ring ? .05 : .09) + lift * .1);
-    g.lineWidth = 1;
-    g.stroke();
-  }
-
-  // The voice. The only part that moves quickly, and only when something is
-  // actually making noise.
-  g.beginPath();
-  const STEPS = 168;
-  for (let i = 0; i <= STEPS; i++) {
-    const a = (i / STEPS) * Math.PI * 2;
-    const wob = still ? 0 : Math.sin(a * 3 + her.spin * 4) * 2 + Math.sin(a * 7 - her.spin * 6) * 1.2;
-    const voice = her.amp * R * .30 * (.62 + .38 * Math.sin(a * 5 + now / 190));
-    const rr = R * .72 + wob * (.4 + her.energy) + voice;
-    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  }
-  g.closePath();
-  g.strokeStyle = rgba(tint, .2 + lift * .55);
-  g.lineWidth = 1.2;
-  g.stroke();
-  if (her.amp > .01 || her.warmth > .01) {
-    g.fillStyle = rgba(tint, .015 + her.amp * .05);
-    g.fill();
-  }
-
-  // Working: one arc, tightening as she goes. Peripheral by design — noticed
-  // without being looked at, and absent the moment she stops.
-  if (her.energy > .01 && !still) {
-    g.beginPath();
-    g.arc(cx, cy, R * 1.18, her.spin * 2.1, her.spin * 2.1 + .5 + her.energy * .9);
-    g.strokeStyle = rgba(tint, .1 + her.energy * .4);
-    g.lineWidth = 1.6;
-    g.stroke();
-  }
-
-  // One ring per tool call, so the work is countable rather than decorative.
-  for (let i = ripples.length - 1; i >= 0; i--) {
-    const rip = ripples[i];
-    const t = (now - rip.at) / rip.life;
-    if (t >= 1) { ripples.splice(i, 1); continue; }
-    g.beginPath();
-    g.arc(cx, cy, R * (.72 + t * .62), 0, Math.PI * 2);
-    g.strokeStyle = rgba(rip.warm ? GOLD : tint, (1 - t) * .3);
-    g.lineWidth = 1.2 * (1 - t) + .2;
-    g.stroke();
-  }
-
-  if (moving()) requestAnimationFrame(paint);
-  else painting = false;
+  for (let i = 0; i < ampData.length; i++) peak = Math.max(peak, Math.abs(ampData[i] - 128));
+  level.style.transform = "scaleX(" + Math.min(1, peak / 70).toFixed(3) + ")";
+  requestAnimationFrame(meter);
 }
 
-const ripple = (warm) => {
-  if (still) return;
-  ripples.push({ at: performance.now(), life: warm ? 2200 : 1300, warm: !!warm });
-  wake();
-};
+/** Called whenever an analyser is attached, so the line starts moving. */
+const listenLevel = () => { if (!metering) requestAnimationFrame(meter); };
 
-addEventListener("resize", measure);
-measure();
 
 /* ════════════════════════════════════════════════════════════════════════
    State
@@ -785,10 +867,6 @@ measure();
 function setState(state, word) {
   document.body.dataset.state = state;
   stateEl.textContent = word;
-  want.energy = state === "working" ? 1 : 0;
-  want.warmth = state === "speaking" ? 1 : 0;
-  want.pale = state === "listening" ? 1 : 0;
-  posture();
 }
 
 function doing(line) {
@@ -922,15 +1000,49 @@ function inWords(lines) {
    rest are one click away and are not built until he asks. */
 const RECENT_STEPS = 7;
 
+/* The verb, for the eye. "Read" and "Write" are what he is scanning for, so
+   they lead the line and the object follows in whatever form the tool gave. */
+function splitStep(line) {
+  const at = line.indexOf(" ");
+  return at < 0 ? [line, ""] : [line.slice(0, at), line.slice(at + 1)];
+}
+
+/**
+ * Something actually changed. That is the half of the work he watches for.
+ *
+ * Not memory: `recall` is a read and shares a kind with `remember`, so
+ * marking the family would light up looking something up as though she had
+ * altered it.
+ */
+const CHANGED = new Set(["changed", "screen"]);
+
 function tool(lines) {
   const t = hers();
   for (const line of lines) {
     t.steps.push(line);
-    ripple(false);
+    const kind = stepKind(line);
+    const made = CHANGED.has(kind);
+
+    const li = document.createElement("li");
+    const [verb, rest] = splitStep(line);
+    li.dataset.verb = verb;
+    li.textContent = rest;
+    li.title = line;
+    if (made) li.classList.add("made");
+    works.append(li);
+    // It is a window on the last few, not a log. The turn keeps all of them.
+    while (works.children.length > LIVE_STEPS) works.firstChild.remove();
+    worksCount.textContent = t.steps.length + (t.steps.length === 1 ? " step" : " steps");
+    // The newest step is the one he is watching, so keep it in view.
+    works.scrollTop = works.scrollHeight;
+    animate(li, { opacity: [0, 1], translateY: [6, 0], duration: 260, ease: "outQuad" });
   }
   doing(lines[lines.length - 1]);
   follow();
 }
+
+/** How many steps stand in the field at once while she is working. */
+const LIVE_STEPS = 9;
 
 /* ── markdown ─────────────────────────────────────────────────────────────
    She writes plain sentences in conversation and markdown when she is doing
@@ -1040,6 +1152,8 @@ function done(ms, fallback) {
   t.caret.remove();
   speakRest(t);
   doing("");
+  works.replaceChildren();
+  worksCount.textContent = "";
 
   const total = ms || Date.now() - t.startedAt;
   if (t.steps.length) {
@@ -1076,7 +1190,9 @@ function done(ms, fallback) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "steps";
-    button.textContent = inWords(t.steps) + " · " + (total / 1000).toFixed(1) + "s";
+    // Non-breaking, so a long summary never wraps between the dot and the
+    // time and leaves "96.0s" stranded on a line of its own.
+    button.textContent = inWords(t.steps) + " · " + (total / 1000).toFixed(1) + "s";
     button.addEventListener("click", () => {
       list.hidden = !list.hidden;
       follow();
@@ -1107,7 +1223,6 @@ function unbidden(said) {
   p.textContent = said;
   el.append(when, p);
   animate(el, { opacity: [0, 1], translateX: [-10, 0], duration: 520, ease: "outCubic" });
-  ripple(true);
   if (speaking) enqueue(said);
   if (phone() && document.body.dataset.memory === "on") memory(false);
   follow();
@@ -1137,8 +1252,7 @@ function showScreen(meta, quiet) {
     stageFrame.removeAttribute("src");
     document.body.removeAttribute("data-stage");
     stageHidden = false;
-    posture();
-    return;
+      return;
   }
   stageTitle.textContent = screenUp.title;
   stageNote.textContent = screenUp.note || "";
@@ -1146,7 +1260,6 @@ function showScreen(meta, quiet) {
   stageHidden = false;
   document.body.dataset.stage = "on";
   if (phone()) memory(false);
-  posture();
   animate(stage, { opacity: [0, 1], duration: 460, ease: "outCubic" });
   if (!quiet) follow();
 }
@@ -1159,7 +1272,6 @@ function showScreen(meta, quiet) {
 function stageAway() {
   stageHidden = true;
   document.body.removeAttribute("data-stage");
-  posture();
   fetch("/screen/clear", { method: "POST", headers: auth })
     .then(() => { screenUp = null; stageFrame.removeAttribute("src"); })
     .catch(() => {});
@@ -1318,7 +1430,7 @@ async function drainAudio() {
             an.connect(ctx.destination);
             analyser = an;
             ampData = new Uint8Array(an.frequencyBinCount);
-            wake();
+            listenLevel();
           } catch { analyser = null; }
         }
         speakingNow = true;
@@ -1417,7 +1529,7 @@ async function startListening() {
         ctx.createMediaStreamSource(micStream).connect(an);
         analyser = an;
         ampData = new Uint8Array(an.frequencyBinCount);
-        wake();
+        listenLevel();
       } catch { analyser = null; }
     }
 
@@ -1468,6 +1580,8 @@ function abandon(why) {
   renderWords(t, true);
   t.caret.remove();
   doing("");
+  works.replaceChildren();
+  worksCount.textContent = "";
   const note = document.createElement("p");
   note.className = "took";
   note.textContent = why;
@@ -1658,7 +1772,6 @@ if (!KEY) {
 // She is here before the page is, so it settles in rather than performing an
 // arrival. One sequence, once.
 if (A && !still) {
-  A.animate(canvas, { opacity: [0, 1], duration: 900, ease: "outCubic" });
   A.animate(".rail > *", { opacity: [0, 1], duration: 500, delay: A.stagger(70), ease: "outCubic" });
   A.animate(".dock", { opacity: [0, 1], duration: 500, delay: 260, ease: "outCubic" });
 }

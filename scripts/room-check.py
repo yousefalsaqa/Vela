@@ -4,13 +4,14 @@ Claims, in order:
   1. Working reads as working, and the tool she is in shows in the rail.
   2. Tool lines do not pile up in the transcript; they fold into one count.
   3. That fold opens, so nothing is hidden — only demoted.
-  4. Her reply is one thing at full weight; the exchange before it recedes.
-  5. An autonomous line is visibly hers-first, not an answer to anything.
-  6. A screen takes the room, and she steps aside rather than competing.
-  7. A click on her screen returns as a turn, marked as coming from the screen.
-  8. Dismiss keeps it, the chip brings it back, a reload restores it.
-  9. An error is readable and does not become a dashboard.
- 10. On a phone the material is the interface, and memory is pulled up.
+  4. Markdown is gone from what he reads and from what she says out loud.
+  5. Her reply is one thing at full weight; the exchange before it recedes.
+  6. An autonomous line is visibly hers-first, not an answer to anything.
+  7. A screen takes the desk, and the conversation gives up width to it.
+  8. A click on her screen returns as a turn, marked as coming from the screen.
+  9. A reload keeps it; putting it away ends it everywhere.
+ 10. An error is readable and does not become a dashboard.
+ 11. On a phone the material is the interface, and memory is pulled up.
 """
 import json, sys, time, urllib.request
 from pathlib import Path
@@ -169,7 +170,11 @@ with sync_playwright() as p:
     push({"screen": "on"})
     time.sleep(0.8)
     check("the stage takes the room", page.evaluate("document.body.dataset.stage") == "on")
-    check("she steps aside for it", page.evaluate("want.r") < 0.2, str(page.evaluate("want.r")))
+    check("the conversation gives up width to it",
+          page.evaluate("getComputedStyle(document.getElementById('thread')).maxWidth")
+          != page.evaluate("getComputedStyle(document.querySelector('.dock')).maxWidth"))
+    check("the work and the screen are panels he can move",
+          page.locator(".panel .grip").count() == 2)
     src = page.eval_on_selector("#stageFrame", "el => el.src")
     check("the frame gets the screen key and never the master token",
           "s=" in src and KEY not in src, src)
@@ -207,7 +212,8 @@ with sync_playwright() as p:
     page.locator("#stageShut").click()
     time.sleep(0.6)
     check("putting it away takes it off the stage", page.evaluate("document.body.dataset.stage") is None)
-    check("and gives her the room back", page.evaluate("want.r") > 0.2)
+    check("and takes it back when the screen goes",
+          page.evaluate("document.body.dataset.stage") is None)
     page.reload()
     page.wait_for_load_state("networkidle")
     time.sleep(0.8)

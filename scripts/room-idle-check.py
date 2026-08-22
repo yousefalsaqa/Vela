@@ -45,7 +45,11 @@ with sync_playwright() as p:
     check("no hero prose in the room", "running this whole time" not in page.content())
     check("no turn/tool/pid counters on the rail", "pid " not in page.locator(".rail").inner_text().lower(),
           page.locator(".rail").inner_text())
-    check("the field is painted", page.evaluate("document.getElementById('field').width") > 0)
+    # The audio-reactive core is gone: it was decoration once the room had
+    # real content in it. What stands in its place is a desk the panels are
+    # laid out on, which is the thing that has to be true on load.
+    check("the desk lays its panels out",
+          page.evaluate("[...document.querySelectorAll('.panel')].every(p => p.style.width && p.style.left)"))
 
     # The composer must be dormant but discoverable, and typing anywhere wakes it.
     check("dock starts dormant", page.evaluate("document.body.dataset.typing") is None)

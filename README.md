@@ -230,21 +230,33 @@ Her second face, at `/` on the same service the REPL attaches to. Same session,
 not a second one: type in the terminal and it appears in the browser, because
 both are clients of one core.
 
-**It is a room rather than a page.** There are no sections, no cards, no
+**It is a desk rather than a page.** There are no sections, no cards, no
 sidebar and no counters printed across the top because the values happen to
-exist. The viewport is her field; the parts appear in it when they have
-something to carry. Her presence is the ground the text stands on, and it
-changes posture rather than being a widget in a corner: she has the room when
-nothing is happening, tightens while she works, and steps in behind the words
-when she puts something on the stage. Conversation is one of the things that
-happens in the room, not the reason it exists — the newest exchange is at full
-weight, everything before it recedes, and an empty room stays empty rather
-than filling with prose about itself.
+exist. The conversation is the base layer and keeps the left; two panels float
+over the rest of it — what she is showing, and what she is doing — and where
+he puts them is where they stay. Not windows in the operating-system sense:
+no title bar, no minimise, no z-order to think about. A hairline round
+something, its name as the handle, a corner that pulls. Positions are kept per
+panel and per rough window size, because a layout arranged on the wide monitor
+is wrong on the laptop and being handed the wrong one is worse than being
+handed none; double-clicking a panel's name puts it back.
 
-**She holds still when she is idle, and means it.** The canvas loop stops
-rather than repainting a still image sixty times a second: motion that carries
-nothing is worse than nothing on a machine she now runs on all day. It starts
-again the moment there is amplitude, a tool call, or a change of posture.
+Dragging happens under a full-window shield, because her screen is an iframe
+and an iframe swallows the pointer the moment it crosses — without it the drag
+stops dead halfway across.
+
+**The work is visible while it happens.** One dim line in the rail is right for
+a turn that reads a file and answers, and useless for watching her build
+something, which is the case where he actually wants to see the machine work.
+So the Work panel carries the steps as they land: reads stay faint, writes and
+edits are cyan, the newest is the lit one, nine at a time. It empties when the
+turn ends and the record folds into the transcript.
+
+There is no audio-reactive core any more. It was a good centrepiece for a page
+that was mostly empty and decoration once the room had real content in it. The
+one piece of information in it — whether the microphone is hearing him, whether
+she is making sound — is a two pixel line on the dock's own rule, present only
+while one of those is true.
 
 Two typefaces, doing two jobs. Serif is her; mono is the instrument she lives
 inside — his typing, tool names, state, times. Cyan is her working, gold is her
@@ -910,3 +922,4 @@ you add to this list, bump it.
 | 3.0.0 | A room instead of a page, and eyes. The hub stopped being a chat window with her bolted to the side: her presence is the ground, the stage takes the floor when she has something to show, and on a phone she is a different body rather than a squeezed desk. `capture_screen` lets her look at what is actually on his monitors. Her markdown stopped being read out loud. |
 | 3.0.1 | A turn that only promised to do something gets handed back to her, so "give me a second" stops being where the work ends. |
 | 3.0.2 | A screen she showed stops following him around: closing it closes it everywhere, and one he left this morning is not put back in front of him tonight. |
+| 3.1.0 | A desk he can arrange. The work she is doing and the thing she is showing became panels he drags where he wants and that stay there, and the audio circle went, since the room has real content in it now. |
