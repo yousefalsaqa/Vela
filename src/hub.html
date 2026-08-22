@@ -138,6 +138,13 @@ body[data-state="lost"] .state { color: var(--wrong); }
   position: relative;
   padding: 0 var(--pad);
   min-height: 0;
+  /* The desk's own edges. A panel's rectangle is worked out against the floor
+     at load; when the composer grows for a multi-line message the floor
+     shrinks under it, and without this a low panel would keep its old size
+     and paint its near-opaque body down over the dock — hiding the text he is
+     typing and swallowing clicks meant for send. Clipping here takes both the
+     paint and the hit-testing with it. */
+  overflow: hidden;
 }
 /* The conversation is the base layer, not a window to be managed. It keeps
    the left of the desk and the panels float over the rest of it. */
@@ -356,7 +363,11 @@ body.dragging .shield { display: block; }
    It is useless for watching her build something, which is the case where he
    actually wants to see the machine work: which file, which command, how far
    in. Nothing here is invented — one line per real tool. */
-body[data-state="working"] .panel.works { display: grid; }
+/* Present only while there is work to show. "Working" is not enough: most
+   turns are her thinking and answering, and an empty panel arriving for two
+   seconds of that is furniture being moved for nothing. The first real tool
+   call is what summons it. */
+.panel.works.on { display: grid; }
 .works ul {
   margin: 0;
   padding: .5rem .7rem;
@@ -538,7 +549,7 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
   .panel.stage { height: 100% !important; }
   .panel > header { padding-left: 0; padding-right: 0; cursor: default; }
   .grip { display: none; }
-  body[data-state="working"] .panel.works { max-height: 34dvh; }
+  .panel.works.on { max-height: 34dvh; }
 
   /* Shown on a phone, the material is the interface — but not a silent one.
      Her latest line lies along the bottom of it, over a fade so the diagram
@@ -931,6 +942,7 @@ function hers() {
   // `raw` is what she actually sent; `words` is that with the markdown taken
   // out, which is what is drawn and what the reading head measures against.
   open = { el, said, caret, startedAt: Date.now(), firstDelta: 0, raw: "", words: "", spoken: 0, emitted: 0, spans: [], steps: [] };
+  cutSpeaking = false; // a new reply gets a clean voice, whatever happened to the last
   setState("working", "working");
   follow();
   return open;
@@ -1016,8 +1028,48 @@ function splitStep(line) {
  */
 const CHANGED = new Set(["changed", "screen"]);
 
+/**
+ * The Work panel exists while there is work, and only then.
+ *
+ * It arrives on the first tool call of a turn rather than on "working",
+ * because most turns are her thinking and answering and an empty panel would
+ * be furniture moved for nothing. It leaves when the turn does — gently, so
+ * the last step is seen going rather than vanishing mid-glance — and an
+ * error or a dropped stream takes it down the same way, so a dead turn's
+ * steps can never stand into the next one.
+ *
+ * `era` guards the crossing: a hide is 240ms long, and a new turn's first
+ * tool inside that window must win or the panel would clear itself moments
+ * after arriving.
+ */
+let worksEra = 0;
+
+function showWorks() {
+  ++worksEra; // any hide still in flight loses
+  if (worksPanel.classList.contains("on")) return;
+  worksPanel.classList.add("on");
+  worksPanel.style.opacity = "";
+  animate(worksPanel, { opacity: [0, 1], translateY: [10, 0], duration: 380, ease: "outCubic" });
+}
+
+function hideWorks() {
+  const era = ++worksEra;
+  const gone = () => {
+    if (era !== worksEra) return; // a new turn got here first
+    worksPanel.classList.remove("on");
+    worksPanel.style.opacity = "";
+    works.replaceChildren();
+    worksCount.textContent = "";
+  };
+  if (!worksPanel.classList.contains("on")) return gone();
+  const going = animate(worksPanel, { opacity: [1, 0], translateY: [0, 6], duration: 240, ease: "inQuad" });
+  if (going && going.then) going.then(gone);
+  else gone();
+}
+
 function tool(lines) {
   const t = hers();
+  showWorks();
   for (const line of lines) {
     t.steps.push(line);
     const kind = stepKind(line);
@@ -1152,8 +1204,7 @@ function done(ms, fallback) {
   t.caret.remove();
   speakRest(t);
   doing("");
-  works.replaceChildren();
-  worksCount.textContent = "";
+  hideWorks();
 
   const total = ms || Date.now() - t.startedAt;
   if (t.steps.length) {
@@ -1294,6 +1345,12 @@ addEventListener("message", (e) => {
    ════════════════════════════════════════════════════════════════════════ */
 let speaking = false, canSpeak = false, speakingNow = false;
 let audioQueue = [], playing = false, current = null, sound = null;
+// The teardown for the sentence sounding right now, so hush() can end it the
+// same way it would end on its own rather than pausing it half-alive.
+let stopCurrent = null;
+// She has been cut off this turn. Blocks the rest of a streaming reply from
+// being spoken over his recording; cleared when the next reply begins.
+let cutSpeaking = false;
 
 /**
  * A browser starts an AudioContext suspended unless it was made during a real
@@ -1360,7 +1417,7 @@ async function enqueue(sentence, range) {
   // a URL out loud. The range stays in the coordinates of what is on screen,
   // which is what the reading head sweeps across.
   const said = forSaying(sentence).trim();
-  if (!said || !canSpeak || !speaking) return;
+  if (!said || !canSpeak || !speaking || cutSpeaking) return;
   audioQueue.push({ said, range: range || null, spans: (open && open.spans) || null });
   if (!playing) drainAudio();
 }
@@ -1436,7 +1493,19 @@ async function drainAudio() {
         speakingNow = true;
         setState("speaking", "speaking");
         const stopSweep = sweep(a, item);
-        const end = () => { stopSweep(); URL.revokeObjectURL(url); current = null; finish(); };
+        let done = false;
+        const end = () => {
+          if (done) return;         // hush and onended can both land; run once
+          done = true;
+          stopSweep();
+          try { URL.revokeObjectURL(url); } catch { /* already gone */ }
+          if (current === a) current = null;
+          if (analyser) { analyser = null; }
+          stopCurrent = null;
+          finish();
+        };
+        // What hush calls: the same teardown, plus stopping the audio itself.
+        stopCurrent = () => { try { a.pause(); } catch { /* not playing */ } a.onended = a.onerror = null; end(); };
         a.onended = a.onerror = end;
         a.play().catch(end);
       });
@@ -1445,14 +1514,28 @@ async function drainAudio() {
   playing = false;
   speakingNow = false;
   analyser = null;
-  if (!open) setState("idle", "with you");
+  // Only when she was the last thing on screen: a barge-in has already moved
+  // the state to listening, and finishing here would stamp idle back over it.
+  if (!open && document.body.dataset.state === "speaking") setState("idle", "with you");
 }
 
-/** Stop mid-sentence. Called when he talks over her. */
-function hush() {
+/**
+ * Stop her mid-sentence.
+ *
+ * The bug this fixes: pausing the audio without running its teardown left the
+ * playback promise in drainAudio awaiting for ever, so the state stuck on
+ * "speaking", the reading head kept re-lighting the cut-off word, and the wav
+ * blob never freed. Now it runs the very teardown the sentence would have run
+ * on its own. `cut` means he talked over her: her remaining sentences this
+ * turn are dropped rather than played into his open microphone.
+ */
+function hush(cut) {
   audioQueue = [];
-  if (current) { try { current.pause(); } catch {} current.onended = current.onerror = null; current = null; }
-  // The head must not be left lit on the word she was cut off at.
+  if (cut) cutSpeaking = true;
+  if (stopCurrent) stopCurrent();
+  else if (current) { try { current.pause(); } catch {} current = null; }
+  // Belt and suspenders: the sweep clears its own, but a queued sentence that
+  // never started playing has no sweep to do it.
   for (const el of document.querySelectorAll(".w.saying")) el.classList.remove("saying");
   playing = false;
   speakingNow = false;
@@ -1506,7 +1589,7 @@ let recorder = null, chunks = [], canHear = false, cutOff = false, micStream = n
 async function startListening() {
   /* Talking over her is an answer in itself: she has said enough. Stop her
      mid-word, and remember it so the next turn carries the reason. */
-  if (speakingNow || audioQueue.length) { hush(); cutOff = true; }
+  if (speakingNow || audioQueue.length) { hush(true); cutOff = true; }
 
   // Whisper loads while he is still talking, which is the whole gap it needs.
   warm("ears");
@@ -1580,8 +1663,7 @@ function abandon(why) {
   renderWords(t, true);
   t.caret.remove();
   doing("");
-  works.replaceChildren();
-  worksCount.textContent = "";
+  hideWorks();
   const note = document.createElement("p");
   note.className = "took";
   note.textContent = why;
@@ -1610,7 +1692,7 @@ function listen() {
     else if (ev.type === "result") done(ev.ms, ev.text);
     else if (ev.type === "say") unbidden(ev.text || "");
     else if (ev.type === "show") showScreen(ev.screen);
-    else if (ev.type === "error") { hitch(ev.message || "Something went wrong."); open = null; doing(""); setState("idle", "with you"); }
+    else if (ev.type === "error") { hitch(ev.message || "Something went wrong."); open = null; doing(""); hideWorks(); setState("idle", "with you"); }
   };
   // It reconnects itself. Say so, because silence is also what working looks like.
   events.onerror = () => {
@@ -1674,7 +1756,7 @@ dock.addEventListener("submit", (e) => {
   e.preventDefault();
   const said = text.value.trim();
   if (!said) return;
-  if (speakingNow || audioQueue.length) { hush(); cutOff = true; } // typing over her counts too
+  if (speakingNow || audioQueue.length) { hush(true); cutOff = true; } // typing over her counts too
   text.value = "";
   grow();
   typing();

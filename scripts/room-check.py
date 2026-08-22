@@ -53,11 +53,23 @@ with sync_playwright() as p:
     page.goto(f"{base}/?k={KEY}")
     page.wait_for_load_state("networkidle")
 
+    # ── the work panel announces work, not thinking ───────────────────────
+    # A turn that only thinks and answers should not move furniture: the panel
+    # arrives with the first real tool call and leaves when the turn ends.
+    page.fill("#text", "say hello")
+    page.keyboard.press("Enter")
+    time.sleep(0.3)
+    push({"type": "delta", "text": "Hey."})
+    check("no tools means no work panel", page.locator("#worksPanel").is_hidden())
+    push({"type": "result", "ms": 300})
+    time.sleep(0.3)
+
     # ── a turn, with tools ────────────────────────────────────────────────
     page.fill("#text", "what is drifting on the turbofan set")
     page.keyboard.press("Enter")
     time.sleep(0.4)
     push({"type": "activity", "lines": ["Read c-mapss/train_FD001.txt"]})
+    check("the first tool call summons the work panel", page.locator("#worksPanel").is_visible())
     check("working reads as working", page.locator("#state").inner_text().lower() == "working",
           page.locator("#state").inner_text())
     check("the tool she is in shows in the rail", "train_FD001" in page.locator("#doing").inner_text(),
@@ -85,8 +97,22 @@ with sync_playwright() as p:
           str(page.locator(".stepped li").count()))
     check("the rail lets the tool go when she is done", page.locator("#doing").inner_text() == "")
     check("she is back with him", page.locator("#state").inner_text().lower() == "with you")
+    until(lambda: page.locator("#worksPanel").is_hidden())
+    check("the work panel leaves when the turn ends", page.locator("#worksPanel").is_hidden())
     page.locator(".steps").first.click()   # fold it away again
     time.sleep(0.2)
+
+    # ── an error takes the work panel down with it ────────────────────────
+    # A dead turn's steps must never stand into the next one.
+    page.fill("#text", "break something")
+    page.keyboard.press("Enter")
+    time.sleep(0.3)
+    push({"type": "activity", "lines": ["Bash python boom.py"]})
+    check("the panel is up during the doomed turn", page.locator("#worksPanel").is_visible())
+    push({"type": "error", "message": "API Error: 500 upstream"})
+    until(lambda: page.locator("#worksPanel").is_hidden())
+    check("an error clears the work panel, not just hides it",
+          page.locator("#worksPanel").is_hidden() and page.locator("#works li").count() == 0)
 
     # ── a long turn: the reason the cap exists ────────────────────────────
     page.fill("#text", "go through the whole set")
@@ -148,6 +174,34 @@ with sync_playwright() as p:
           "`" not in heard and "**" not in heard, heard)
     check("a windows path becomes the filename, not the whole path",
           "C:\\" not in heard and "shot.png" in heard, heard)
+    # ── talking over her stops her, rather than her reading into his mic ──
+    # The confirmed bug: barge-in silenced the queue but left `speaking` true,
+    # so the rest of a streaming reply played over his recording. Typing over
+    # her takes the same path as the mic, and needs no fake microphone.
+    spoken_log.write_text("", encoding="utf8")
+    page.locator("#ear").click()          # voice back on
+    until(lambda: page.evaluate("speaking") is True)
+    page.fill("#text", "tell me about the burner")
+    page.keyboard.press("Enter")
+    time.sleep(0.3)
+    push({"type": "delta", "text": "The burner sits at station forty. "})
+    until(lambda: spoken_log.read_text(encoding="utf8").strip() != "")
+    spoke_before = len(spoken_log.read_text(encoding="utf8").splitlines())
+    # He cuts in before she finishes; the reply is still streaming.
+    page.fill("#text", "never mind, what about the fan")
+    page.keyboard.press("Enter")
+    time.sleep(0.2)
+    push({"type": "delta", "text": "It reaches about a thousand degrees Rankine. "})
+    push({"type": "delta", "text": "The liner is the first thing to go. "})
+    push({"type": "result", "ms": 1200})
+    time.sleep(0.8)
+    spoke_after = len(spoken_log.read_text(encoding="utf8").splitlines())
+    check("cutting her off stops the rest of that reply being spoken",
+          spoke_after == spoke_before, f"before {spoke_before}, after {spoke_after}")
+    check("and no word is left lit gold after the cut",
+          page.locator(".w.saying").count() == 0)
+    check("the sentence teardown ran, so nothing is left playing",
+          page.evaluate("stopCurrent") is None)
     page.locator("#ear").click()          # back off, so later checks are quiet
 
     # ── a second exchange, so the first has to recede ─────────────────────
@@ -229,9 +283,36 @@ with sync_playwright() as p:
     check("an error is said plainly", page.locator(".hitch").count() == 1)
     page.screenshot(path=str(here / "s-error.png"))
 
+    # ── a growing composer must not be covered by a panel ─────────────────
+    # Confirmed bug: composing a multi-line message grew the textarea, the
+    # floor shrank under it, and a low panel kept its old rectangle and painted
+    # its opaque body down over the dock — hiding the text and eating clicks
+    # meant for send.
+    push({"screen": "off"})
+    page.fill("#text", "let me get the whole engine working first")
+    page.keyboard.press("Enter")
+    time.sleep(0.3)
+    push({"type": "activity", "lines": ["Bash python long_run.py"]})  # work panel, low and up
+    time.sleep(0.3)
+    page.fill("#text", "\n".join("this is line %d of a long message" % i for i in range(8)))
+    time.sleep(0.3)
+    sb = page.locator("#send").bounding_box()
+    at_send = page.evaluate(
+        "([x,y]) => { const el = document.elementFromPoint(x,y); return el ? (el.closest('.dock') ? 'dock' : (el.closest('.panel') ? 'panel' : el.tagName)) : 'none'; }",
+        [sb["x"] + sb["width"] / 2, sb["y"] + sb["height"] / 2],
+    )
+    check("send stays clickable under a grown composer", at_send == "dock", at_send)
+    check("the desk clips its panels at its own edge",
+          page.evaluate("getComputedStyle(document.querySelector('.floor')).overflow").startswith("hidden"))
+    page.fill("#text", "")
+    push({"type": "delta", "text": "Done."})
+    push({"type": "result", "ms": 500})
+    time.sleep(0.3)
+
     # ── the phone ─────────────────────────────────────────────────────────
-    # The reload above emptied the thread, so give her something to have said:
-    # a screen with no conversation around it is not the case being checked.
+    # Something on the stage, and a line of hers around it: a screen with no
+    # conversation is not the case being checked.
+    push({"screen": "on"})
     push({"type": "delta", "text": "Sensor 9 again, top right."})
     push({"type": "result", "ms": 700})
     page.set_viewport_size({"width": 390, "height": 844})

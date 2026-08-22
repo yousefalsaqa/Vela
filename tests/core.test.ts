@@ -199,6 +199,65 @@ describe("createCore", () => {
     core.stop();
   });
 
+  test("a session that ends without a result does not leave her stuck busy", async () => {
+    // The real wedge: with streaming input the SDK stream only ends when the
+    // subprocess dies (a hit usage limit, lapsed credentials). The loop
+    // finished with no result, so busy used to stay true for ever and every
+    // later turn queued into a session that was already gone.
+    let calls = 0;
+    const dead: Session = {
+      close: () => {},
+      async *[Symbol.asyncIterator]() {
+        /* ends immediately: the subprocess is gone */
+      },
+    };
+    const live = scriptedSession();
+    const core = createCore({
+      systemPrompt: "test",
+      store,
+      heartbeatMs: 0,
+      reconnectMs: [0],
+      session: (stream) => {
+        if (calls++ === 0) return dead;
+        void live.collectTurns(stream as never, 5);
+        return live.session;
+      },
+    });
+    core.subscribe((e) => events.push(e));
+
+    await until(() => events.some((e) => e.type === "error"), "the drop to be reported");
+    assert.equal(core.isBusy(), false, "a dead session must not leave her frozen busy");
+    core.stop();
+  });
+
+  test("stands a fresh session up so his next turn lands somewhere alive", async () => {
+    let calls = 0;
+    const dead: Session = {
+      close: () => {},
+      async *[Symbol.asyncIterator]() {},
+    };
+    const live = scriptedSession();
+    const core = createCore({
+      systemPrompt: "test",
+      store,
+      heartbeatMs: 0,
+      reconnectMs: [0],
+      session: (stream) => {
+        if (calls++ === 0) return dead;
+        void live.collectTurns(stream as never, 5);
+        return live.session;
+      },
+    });
+    core.subscribe((e) => events.push(e));
+
+    await until(() => calls === 2, "a new session to be built");
+    core.send("you there?");
+    await until(() => live.sent.includes("you there?"), "the turn to reach the healed session");
+    live.emit(result(50, "Right here."));
+    await until(() => events.some((e) => e.type === "result"), "her answer");
+    core.stop();
+  });
+
   test("reports a result that came back without a duration as zero", async () => {
     const core = build();
     core.send("hello");

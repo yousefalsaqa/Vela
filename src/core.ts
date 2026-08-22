@@ -42,6 +42,8 @@ export interface CoreOptions {
   store?: Store;
   /** Defaults to a real SDK session; tests pass a scripted one. */
   session?: SessionFactory;
+  /** Backoff before rebuilding a session that died, growing per failure. Tests shorten it. */
+  reconnectMs?: number[];
   /** 0 disables the heartbeat and, with it, triggers. */
   heartbeatMs?: number;
   heartbeatModel?: string;
@@ -149,7 +151,7 @@ export function createCore(opts: CoreOptions): Core {
     for (const l of [...listeners]) l(event);
   };
 
-  const turns = createTurnQueue();
+  let turns = createTurnQueue();
 
   const makeSession: SessionFactory =
     opts.session ??
@@ -159,7 +161,7 @@ export function createCore(opts: CoreOptions): Core {
         options: sessionOptions(opts) as Parameters<typeof query>[0]["options"],
       }) as unknown as Session);
 
-  const session = makeSession(turns.stream());
+  let session = makeSession(turns.stream());
 
   let busy = false;
   let streamedThisTurn = false;
@@ -169,51 +171,106 @@ export function createCore(opts: CoreOptions): Core {
   let toolsThisTurn = 0;
   let pushedThisTurn = false;
 
-  // One pump for the life of the session, rather than a loop per turn.
+  /**
+   * How long to wait before standing a dead session back up, growing with each
+   * failure so a persistent outage (a hit usage limit, say) is not hammered.
+   * A fresh session costs nothing until a turn reaches it, so healing while he
+   * is not talking is free; the wait only spaces out his failed attempts.
+   */
+  const RECONNECT_MS = opts.reconnectMs ?? [1_000, 4_000, 15_000, 30_000, 60_000];
+  let deaths = 0;
+
+  const wait = (ms: number) =>
+    ms <= 0
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, ms);
+          if (typeof (t as { unref?: () => void }).unref === "function") (t as { unref: () => void }).unref();
+        });
+
+  /**
+   * One pump for the life of the core, across sessions rather than within one.
+   *
+   * With streaming input the SDK stream stays open across turns and only ends
+   * when the input ends (stop) or the subprocess dies. So a loop that finishes
+   * while she is still meant to be running means the session died under her —
+   * the model refused, the credentials lapsed, the usage limit was hit — and
+   * the query behind it will never resume. Left there, `busy` stays true, the
+   * heartbeat freezes, and every "you there?" queues into a session that is
+   * already gone, which reads as her being stuck. Instead: say so, drop the
+   * turn that died with it, and stand a fresh session up so the next thing he
+   * says lands somewhere alive.
+   */
   const pump = (async () => {
-    try {
-      for await (const msg of session) {
-        if (stopped) break;
+    while (!stopped) {
+      let threw: Error | null = null;
+      try {
+        for await (const msg of session) {
+          if (stopped) break;
 
-        const lines = toolActivity(msg);
-        if (lines.length) {
-          toolsThisTurn += lines.length;
-          emit({ type: "activity", lines });
-        }
+          const lines = toolActivity(msg);
+          if (lines.length) {
+            toolsThisTurn += lines.length;
+            emit({ type: "activity", lines });
+          }
 
-        const delta = streamedText(msg);
-        if (delta !== null && delta !== "") {
-          streamedThisTurn = true;
-          saidThisTurn += delta;
-          emit({ type: "delta", text: delta });
-        }
+          const delta = streamedText(msg);
+          if (delta !== null && delta !== "") {
+            streamedThisTurn = true;
+            saidThisTurn += delta;
+            emit({ type: "delta", text: delta });
+          }
 
-        const m = msg as { type?: string; duration_ms?: number; result?: string };
-        if (m.type === "result") {
-          busy = false;
-          emit({
-            type: "result",
-            ms: m.duration_ms ?? 0,
-            ...(streamedThisTurn ? {} : { text: m.result }),
-          });
+          const m = msg as { type?: string; duration_ms?: number; result?: string };
+          if (m.type === "result") {
+            busy = false;
+            deaths = 0; // a turn came back, so whatever was wrong has passed
+            emit({
+              type: "result",
+              ms: m.duration_ms ?? 0,
+              ...(streamedThisTurn ? {} : { text: m.result }),
+            });
 
-          const said = streamedThisTurn ? saidThisTurn : m.result ?? "";
-          // Once per turn. Handing the note back to a turn that was itself
-          // the note would be a loop, and a stubborn one.
-          const owed = !pushedThisTurn && endedOnAPromise(said, toolsThisTurn);
-          streamedThisTurn = false;
-          saidThisTurn = "";
-          toolsThisTurn = 0;
-          if (owed) {
-            pushedThisTurn = true;
-            busy = true;
-            turns.send(UNFINISHED);
+            const said = streamedThisTurn ? saidThisTurn : m.result ?? "";
+            // Once per turn. Handing the note back to a turn that was itself
+            // the note would be a loop, and a stubborn one.
+            const owed = !pushedThisTurn && endedOnAPromise(said, toolsThisTurn);
+            streamedThisTurn = false;
+            saidThisTurn = "";
+            toolsThisTurn = 0;
+            if (owed) {
+              pushedThisTurn = true;
+              busy = true;
+              turns.send(UNFINISHED);
+            }
           }
         }
+      } catch (err) {
+        threw = err as Error;
       }
-    } catch (err) {
+      if (stopped) break;
+
+      // The stream is gone and she is meant to be here. Surface it, reset the
+      // turn that fell in the hole, and rebuild.
       busy = false;
-      if (!stopped) emit({ type: "error", message: (err as Error).message });
+      streamedThisTurn = false;
+      saidThisTurn = "";
+      toolsThisTurn = 0;
+      emit({
+        type: "error",
+        message: threw
+          ? threw.message
+          : "Lost the connection to the model. Reconnecting.",
+      });
+
+      const backoff = RECONNECT_MS[Math.min(deaths, RECONNECT_MS.length - 1)];
+      deaths++;
+      await wait(backoff);
+      if (stopped) break;
+
+      turns.end();
+      turns = createTurnQueue();
+      session = makeSession(turns.stream());
     }
   })();
 
