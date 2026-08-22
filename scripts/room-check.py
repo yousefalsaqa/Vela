@@ -102,6 +102,40 @@ with sync_playwright() as p:
     page.locator(".steps").first.click()   # fold it away again
     time.sleep(0.2)
 
+    # ── keep: the work panel can be pinned to stay between turns ──────────
+    page.fill("#text", "read a couple of files")
+    page.keyboard.press("Enter")
+    time.sleep(0.3)
+    push({"type": "activity", "lines": ["Read a.py"]})
+    page.locator("#worksKeep").click()      # pin it
+    push({"type": "delta", "text": "Both read."})
+    push({"type": "result", "ms": 400})
+    until(lambda: page.locator("#state").inner_text().lower() == "with you")
+    check("kept, the work panel stays after the turn ends", page.locator("#worksPanel").is_visible())
+    check("the keep toggle reads as on", page.locator("#worksKeep").get_attribute("aria-pressed") == "true")
+
+    # A fresh turn's first tool clears the last turn's steps rather than piling on.
+    page.fill("#text", "and one more")
+    page.keyboard.press("Enter")
+    time.sleep(0.3)
+    push({"type": "activity", "lines": ["Read b.py"]})
+    check("a new turn starts the kept panel clean", page.locator("#works li").count() == 1,
+          str(page.locator("#works li").count()))
+    push({"type": "result", "ms": 300})
+    time.sleep(0.3)
+
+    # The choice survives a reload.
+    page.reload()
+    page.wait_for_load_state("networkidle")
+    time.sleep(0.8)
+    check("keep is remembered across a reload", page.locator("#worksPanel").is_visible()
+          and page.locator("#worksKeep").get_attribute("aria-pressed") == "true")
+
+    # Unpinning while idle lets it go.
+    page.locator("#worksKeep").click()
+    until(lambda: page.locator("#worksPanel").is_hidden())
+    check("unpinning while idle lets it leave", page.locator("#worksPanel").is_hidden())
+
     # ── an error takes the work panel down with it ────────────────────────
     # A dead turn's steps must never stand into the next one.
     page.fill("#text", "break something")

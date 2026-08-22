@@ -324,6 +324,23 @@ body[data-stage="on"] .thread { max-width: 40ch; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Keep the Work panel between turns instead of letting it leave with each
+   one. Off it reads as a faint verb; pinned it goes gold, the same language
+   the rest of the room uses for "she is holding this". */
+.keep {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 0 .1rem;
+  cursor: pointer;
+  color: var(--faint);
+  font: 500 .58rem/1 var(--mono);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+}
+.keep:hover { color: var(--dim); }
+.keep[aria-pressed="true"] { color: var(--gold); }
 .panel .shut {
   margin-left: auto;
   flex: 0 0 auto;
@@ -643,7 +660,7 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
     </div>
 
     <section class="panel works" id="worksPanel" data-panel="works" aria-hidden="true">
-      <header><h2>Work</h2><p class="note" id="worksCount"></p></header>
+      <header><h2>Work</h2><p class="note" id="worksCount"></p><button type="button" class="keep" id="worksKeep" title="Keep it open between turns" aria-pressed="false">keep</button></header>
       <ul id="works"></ul>
       <span class="grip" data-grip></span>
     </section>
@@ -704,7 +721,7 @@ const thread = $("thread"), stateEl = $("state"), doingEl = $("doing"), lockedEl
 const dock = $("dock"), text = $("text"), micKey = $("mic"), earKey = $("ear"), sendKey = $("send");
 const stage = $("stage"), stageTitle = $("stageTitle"), stageNote = $("stageNote");
 const stageFrame = $("stageFrame"), stageShut = $("stageShut"), probe = $("probe");
-const works = $("works"), worksPanel = $("worksPanel"), worksCount = $("worksCount");
+const works = $("works"), worksPanel = $("worksPanel"), worksCount = $("worksCount"), worksKeep = $("worksKeep");
 const level = $("level"), shield = $("shield");
 const pull = $("pull");
 
@@ -1044,6 +1061,13 @@ const CHANGED = new Set(["changed", "screen"]);
  */
 let worksEra = 0;
 
+/* Kept open on purpose, remembered across reloads. Default is the panel that
+   comes and goes with the work; pinned, it stays put so he can watch a run
+   from the same place every time. */
+const KEEP = "vela.keepwork";
+let worksPinned = false;
+try { worksPinned = localStorage.getItem(KEEP) === "1"; } catch { worksPinned = false; }
+
 function showWorks() {
   ++worksEra; // any hide still in flight loses
   if (worksPanel.classList.contains("on")) return;
@@ -1067,8 +1091,33 @@ function hideWorks() {
   else gone();
 }
 
+/* The turn is over. Pinned, the panel and its steps stand as the record of
+   what she just did, until the next turn's first tool clears them; unpinned,
+   it leaves the way it came. */
+function endWorks() {
+  if (worksPinned) return;
+  hideWorks();
+}
+
+function setKeep(on) {
+  worksPinned = on;
+  worksKeep.setAttribute("aria-pressed", String(on));
+  try { localStorage.setItem(KEEP, on ? "1" : ""); } catch { /* private window */ }
+  if (on) showWorks();
+  else if (!open) hideWorks(); // let it go now, unless a turn is mid-flight
+}
+
+worksKeep.addEventListener("click", () => setKeep(!worksPinned));
+if (worksPinned) setKeep(true);
+
 function tool(lines) {
   const t = hers();
+  // First tool of a fresh turn: a pinned panel still showing the last turn's
+  // steps starts clean rather than piling this turn on top of the last.
+  if (!t.worksStarted) {
+    t.worksStarted = true;
+    if (worksPinned) { works.replaceChildren(); worksCount.textContent = ""; }
+  }
   showWorks();
   for (const line of lines) {
     t.steps.push(line);
@@ -1204,7 +1253,7 @@ function done(ms, fallback) {
   t.caret.remove();
   speakRest(t);
   doing("");
-  hideWorks();
+  endWorks();
 
   const total = ms || Date.now() - t.startedAt;
   if (t.steps.length) {
@@ -1663,7 +1712,7 @@ function abandon(why) {
   renderWords(t, true);
   t.caret.remove();
   doing("");
-  hideWorks();
+  endWorks();
   const note = document.createElement("p");
   note.className = "took";
   note.textContent = why;
@@ -1692,7 +1741,7 @@ function listen() {
     else if (ev.type === "result") done(ev.ms, ev.text);
     else if (ev.type === "say") unbidden(ev.text || "");
     else if (ev.type === "show") showScreen(ev.screen);
-    else if (ev.type === "error") { hitch(ev.message || "Something went wrong."); open = null; doing(""); hideWorks(); setState("idle", "with you"); }
+    else if (ev.type === "error") { hitch(ev.message || "Something went wrong."); open = null; doing(""); endWorks(); setState("idle", "with you"); }
   };
   // It reconnects itself. Say so, because silence is also what working looks like.
   events.onerror = () => {

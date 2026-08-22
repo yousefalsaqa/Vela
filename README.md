@@ -924,3 +924,4 @@ you add to this list, bump it.
 | 3.0.2 | A screen she showed stops following him around: closing it closes it everywhere, and one he left this morning is not put back in front of him tonight. |
 | 3.1.0 | A desk he can arrange. The work she is doing and the thing she is showing became panels he drags where he wants and that stay there, and the audio circle went, since the room has real content in it now. |
 | 3.2.0 | She survives losing the model. A session that dies now surfaces the drop and stands itself back up instead of leaving her silently stuck, so a hit usage limit is a pause rather than a wedge. The work panel arrives with the first tool and leaves with the turn; talking over her stops her instead of reading into the mic. |
+| 3.2.1 | A keep toggle on the Work panel pins it open between turns, remembered across reloads, for watching a long run from one place. |
