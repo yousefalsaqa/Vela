@@ -20,8 +20,8 @@ import { join, basename } from "node:path";
  * Push-to-talk. ffmpeg captures the microphone, whisper turns it into text,
  * and the text goes into the same turn queue a typed line would.
  *
- * Deliberately not a wake word. "Hey Vela" means training a model on synthetic
- * speech, and it's worth proving the loop feels good before paying for that.
+ * The wake word is built on the same two pieces rather than on a model of its
+ * own — see wake.ts. What that decision cost is written down there.
  */
 
 
@@ -158,6 +158,24 @@ export interface Recorder {
 }
 
 /**
+ * What ffmpeg is asked for, in both directions the microphone is used: a
+ * push-to-talk capture that ends, and the open stream the wake word listens
+ * to. They must agree on the format, because the same whisper worker reads
+ * both, so there is one place that says what the format is.
+ */
+export function captureArgs(device: string, rate = SAMPLE_RATE): string[] {
+  return [
+    "-hide_banner",
+    "-loglevel", "error",
+    "-f", "dshow",
+    "-i", `audio=${device}`,
+    "-ac", "1",                 // whisper wants mono
+    "-ar", String(rate),        // at 16 kHz
+    "-f", "s16le", "pipe:1",    // raw, straight down stdout
+  ];
+}
+
+/**
  * Start recording now. The caller stops it — in the REPL, by pressing Enter
  * again — which is why this returns immediately with a stop handle.
  *
@@ -171,19 +189,10 @@ export function startRecording(device: string, opts: ListenOptions = {}): Record
   const ffmpeg = opts.ffmpeg ?? "ffmpeg";
   const chunks: Buffer[] = [];
 
-  const proc: ChildProcess = spawn(
-    ffmpeg,
-    [
-      "-hide_banner",
-      "-loglevel", "error",
-      "-f", "dshow",
-      "-i", `audio=${device}`,
-      "-ac", "1",                    // whisper wants mono
-      "-ar", String(SAMPLE_RATE),    // at 16 kHz
-      "-f", "s16le", "pipe:1",       // raw, straight down stdout
-    ],
-    { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
-  );
+  const proc: ChildProcess = spawn(ffmpeg, captureArgs(device), {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
 
   let listening: () => void;
   const ready = new Promise<void>((resolve) => (listening = resolve));
@@ -223,6 +232,75 @@ export function startRecording(device: string, opts: ListenOptions = {}): Record
       ]);
       proc.kill();
       return Buffer.concat(chunks);
+    },
+  };
+}
+
+export interface Mic {
+  /** Resolves once samples are actually arriving. See Recorder.ready. */
+  ready: Promise<void>;
+  close: () => void;
+}
+
+/**
+ * Hold the microphone open and hand every chunk to `onAudio` as it lands.
+ *
+ * The push-to-talk recorder above collects the whole utterance and gives it
+ * back at the end, because it knows when the end is: he pressed Enter. Nothing
+ * tells the wake word when he stopped talking, so it has to hear the room as
+ * it happens and work that out itself.
+ *
+ * Chunks arrive at whatever size the pipe hands over — this does no framing.
+ * The segmenter in wake.ts does, because it is the thing that cares.
+ */
+export function openMic(
+  device: string,
+  opts: {
+    onAudio: (pcm: Buffer) => void;
+    /** The capture ended on its own: device unplugged, ffmpeg died. */
+    onEnd?: (why: string) => void;
+    ffmpeg?: string;
+    spawn?: Spawner;
+  },
+): Mic {
+  const spawn = opts.spawn ?? realSpawn;
+  const proc: ChildProcess = spawn(opts.ffmpeg ?? "ffmpeg", captureArgs(device), {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  let listening: () => void;
+  const ready = new Promise<void>((resolve) => (listening = resolve));
+
+  let closed = false;
+  /**
+   * The end is reported once, whoever gets there first. A device that is
+   * pulled out fires both 'error' and 'close', and a caller that reopens on
+   * each of them opens two microphones.
+   */
+  const ended = (why: string) => {
+    if (closed) return;
+    closed = true;
+    listening();
+    opts.onEnd?.(why);
+  };
+
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    listening();
+    opts.onAudio(chunk);
+  });
+  proc.on("error", (err: Error) => ended(err.message));
+  proc.on("close", () => ended("the capture stopped"));
+
+  return {
+    ready,
+    close() {
+      // Deliberately not reported as an end: the caller asked for this, and a
+      // wake listener that reopens on its own shutdown never shuts down.
+      closed = true;
+      listening?.();
+      proc.stdin?.end();
+      proc.kill();
     },
   };
 }

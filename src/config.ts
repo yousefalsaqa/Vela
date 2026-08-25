@@ -2,6 +2,7 @@ import { readdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "./version.js";
+import { WAKE_WORDS as DEFAULT_WAKE_WORDS } from "./wake.js";
 
 /**
  * Everything both entry points need to agree on: who she is, how often she
@@ -347,6 +348,67 @@ export const WHISPER_PYTHON =
     process.env.APPDATA ?? "",
     "uv", "tools", "whisper-ctranslate2", "Scripts", "python.exe",
   );
+
+/**
+ * The wake word: she hears the room and answers to her name.
+ *
+ * On by default, because a service running from boot with a microphone
+ * attached and no way to address it is a service you have to go and find. It
+ * only ever costs anything when someone in the room says something — silence
+ * never reaches whisper, let alone the model. VELA_WAKE=off if the room is
+ * shared, or if something else needs exclusive use of the microphone.
+ *
+ * Only the service listens this way. The terminal has push-to-talk, which is
+ * the right thing when you already have a window open, and two processes
+ * holding the same microphone is one of them getting silence.
+ */
+export const WAKE_ON = switchedOn(process.env.VELA_WAKE, true);
+
+/**
+ * What she answers to. Comma-separated, and it is a list rather than a word
+ * because whisper hears the name differently depending on the vowel; the
+ * defaults live in wake.ts next to the reason for each one.
+ */
+export const WAKE_WORDS = parseSkillList(process.env.VELA_WAKE_WORDS) ?? DEFAULT_WAKE_WORDS;
+
+/**
+ * How long after a turn she keeps listening without her name.
+ *
+ * Having to say "Vela" before every sentence turns a conversation into a
+ * command line. 0 turns the window off and requires the name every time.
+ */
+export const WAKE_FOLLOWUP_MS = Number(process.env.VELA_WAKE_FOLLOWUP ?? "8000");
+
+/**
+ * How much louder than the room a sound has to be before it is speech.
+ *
+ * Lower is more sensitive: she picks up a quieter voice, and also the
+ * keyboard. Raise it in a noisy room, drop it if she misses him.
+ */
+export const WAKE_MARGIN_DB = Number(process.env.VELA_WAKE_MARGIN ?? "8");
+
+/** Longest single utterance she will send to whisper, in milliseconds. */
+export const WAKE_MAX_MS = Number(process.env.VELA_WAKE_MAX ?? "15000");
+
+/**
+ * What she says when he says only her name.
+ *
+ * Canned rather than a model turn on purpose. He has just said one word and is
+ * waiting to hear whether she heard it; a second and a half of thinking to
+ * produce "yes?" is the wrong trade, and a different acknowledgement every
+ * time is worse than the same one.
+ */
+export const WAKE_ACK = process.env.VELA_WAKE_ACK ?? "Yes?";
+
+/**
+ * Print every transcript the wake word considered, and how loud it was.
+ *
+ * The two ways this goes wrong — she never answers, or she answers to the
+ * television — look identical from the outside and have opposite fixes. This
+ * shows which one is happening, and the level next to it is what
+ * VELA_WAKE_MARGIN should be set against.
+ */
+export const WAKE_DEBUG = switchedOn(process.env.VELA_WAKE_DEBUG, false);
 
 export const PERSONA = `
 Your name is ${NAME}. Anything earlier in this prompt that calls you Claude

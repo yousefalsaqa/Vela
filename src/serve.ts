@@ -3,8 +3,17 @@ import { createCore } from "./core.js";
 import { serve, readEndpoint, type Endpoint } from "./server.js";
 import { reachable } from "./client.js";
 import { spawn } from "./proc.js";
-import { createTranscriber, cliTranscriber, pcmFromAudio, resolveFfmpeg } from "./listen.js";
-import { kokoroSynth } from "./voice.js";
+import {
+  createTranscriber,
+  cliTranscriber,
+  pcmFromAudio,
+  resolveFfmpeg,
+  resolveFfplay,
+  audioDevices,
+  pickDevice,
+} from "./listen.js";
+import { kokoroSynth, synthSpeaker, createVoice, PRONOUNCE_PHONEMES } from "./voice.js";
+import { startWakeListener, type WakeListener } from "./wake.js";
 import { existsSync } from "node:fs";
 import { BUILD } from "./version.js";
 import {
@@ -34,6 +43,15 @@ import {
   KOKORO_VOICE,
   KOKORO_SPEED,
   FFMPEG,
+  MIC,
+  VOICE_GAP_MS,
+  WAKE_ON,
+  WAKE_WORDS,
+  WAKE_ACK,
+  WAKE_DEBUG,
+  WAKE_MARGIN_DB,
+  WAKE_MAX_MS,
+  WAKE_FOLLOWUP_MS,
 } from "./config.js";
 
 /** Where her second face lives. The token rides in the URL; see server.ts. */
@@ -53,9 +71,12 @@ function openInBrowser(url: string) {
   }
 }
 
+/** Released on shutdown. A no-op until the wake word actually starts. */
+let stopListening: () => void = () => {};
+
 /**
- * Vela as a background service. Clients — the REPL, the hub, and voice later —
- * attach and detach; she keeps her session, her watches and her memory
+ * Vela as a background service. Clients — the REPL, the hub, and the wake word
+ * — attach and detach; she keeps her session, her watches and her memory
  * throughout.
  */
 async function main() {
@@ -128,6 +149,120 @@ async function main() {
     // deferred model loads in that gap instead of after it.
     warm: (what) => (what === "ears" ? ears.warm() : mouth?.warm()),
   });
+  /**
+   * Her ears, always open.
+   *
+   * The hub's microphone button and the terminal's push-to-talk both say when
+   * a turn starts. This has to work that out from the room, so it has a mouth
+   * of its own as well: a reply that only appears in a browser tab is no use
+   * to someone who never opened one.
+   */
+  async function startListening(): Promise<WakeListener | null> {
+    const off = (why: string) => {
+      console.log(`  \x1b[33mWake word off:\x1b[0m ${why}`);
+      return null;
+    };
+    if (!mouth) {
+      return off(
+        "Kokoro isn't installed, so she'd have no way to answer out loud." +
+          " Set VELA_KOKORO_PYTHON, or VELA_WAKE=off to stop saying this.",
+      );
+    }
+    const device = pickDevice(await audioDevices(ffmpeg), MIC);
+    if (!device) return off("ffmpeg found no microphone. Check sound settings, or set VELA_MIC.");
+
+    const speaker = synthSpeaker({
+      render: (text) => mouth.render(text),
+      play: resolveFfplay() ?? "ffplay",
+      gapMs: VOICE_GAP_MS,
+      onProblem: (why) => console.log(`  Voice: ${why}`),
+    });
+    // Kokoro takes inline phonemes rather than a respelling; see voice.ts.
+    const voice = createVoice(speaker.speak, PRONOUNCE_PHONEMES);
+
+    /**
+     * True only for a turn the wake word started.
+     *
+     * Everything the core does is broadcast to everyone attached, so without
+     * this a sentence typed into the hub would be played twice: once by the
+     * browser that asked for it and once out of the speakers here.
+     */
+    let answering = false;
+
+    /**
+     * The end of a spoken turn: say the last fragment, wait for the room to
+     * go quiet, and only then start listening again. Without the wait she
+     * hears the tail of her own sentence and takes it for his.
+     *
+     * Draining closes the player, so the next reply starts a new one and pays
+     * ffplay's ~450ms startup before its first word. The terminal keeps one
+     * player for a whole conversation and pays that once, but it has a key
+     * press telling it when a turn begins and can afford to. Nothing here
+     * says when she has finished being heard except the player closing. The
+     * alternative is timing the tail from the samples written, which is exact
+     * arithmetic over an inexact start, and getting it wrong means she
+     * answers herself.
+     */
+    const finish = async () => {
+      if (!answering) return;
+      answering = false;
+      voice.flush();
+      await speaker.drain?.().catch(() => {});
+      listener.resume();
+    };
+
+    core.subscribe((event) => {
+      if (!answering) return;
+      if (event.type === "delta") voice.push(event.text);
+      else if (event.type === "result") {
+        if (event.text) voice.push(event.text);
+        void finish();
+      } else if (event.type === "error") void finish();
+    });
+
+    const listener = startWakeListener({
+      device,
+      ffmpeg,
+      words: WAKE_WORDS,
+      followUpMs: WAKE_FOLLOWUP_MS,
+      segment: { marginDb: WAKE_MARGIN_DB, maxMs: WAKE_MAX_MS },
+      hear: (pcm) => ears.hear(pcm),
+
+      onCommand: (text) => {
+        console.log(`  \x1b[36myou ›\x1b[0m ${text}`);
+        listener.hold();
+        answering = true;
+        core.send(text);
+      },
+
+      // He said her name and nothing else. Answering that with a model turn
+      // would put a second and a half between the name and the reply.
+      onName: () => {
+        listener.hold();
+        voice.say(WAKE_ACK);
+        void Promise.resolve(speaker.drain?.())
+          .catch(() => {})
+          .then(() => listener.resume());
+      },
+
+      onHeard: ({ text, woke, level }) => {
+        if (WAKE_DEBUG) {
+          console.log(`  \x1b[90m${woke ? "→" : "·"} ${level.toFixed(0)}dB  ${text}\x1b[0m`);
+        }
+      },
+      onProblem: (why) => console.log(`  \x1b[33mWake word:\x1b[0m ${why}`),
+    });
+
+    await listener.ready;
+    console.log(`  Wake word on (${device}). Say "${NAME}".`);
+    stopListening = () => {
+      listener.stop();
+      voice.stop();
+      speaker.stop();
+    };
+    return listener;
+  }
+
   const hub = hubUrl(server.endpoint);
   console.log(
     `\n  ${NAME} ${BUILD} listening on 127.0.0.1:${server.endpoint.port} (pid ${process.pid}).` +
@@ -137,12 +272,17 @@ async function main() {
   );
   if (OPEN_HUB) openInBrowser(hub);
 
+  // After the banner: opening the microphone takes about 1.3s, and the address
+  // is the thing worth reading first.
+  if (WAKE_ON) await startListening();
+
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log("\n  Shutting down.");
     await server.close();
+    stopListening();
     core.stop();
     ears.stop();
     mouth?.stop();

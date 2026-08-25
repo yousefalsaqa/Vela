@@ -12,6 +12,7 @@ import {
   pcmPlayer,
   kokoroSpeaker,
   kokoroSynth,
+  synthSpeaker,
   neuralSpeaker,
   windowsSpeaker,
   PRONOUNCE_PHONEMES,
@@ -1099,5 +1100,109 @@ describe("a per-sentence pause", () => {
     player.write(Buffer.alloc(80, 7));
     player.write(Buffer.alloc(80, 7), 60);
     assert.equal(fake.last().proc.written.length, 80 + Math.round(24_000 * 0.06) * 2 + 80);
+  });
+});
+
+describe("synthSpeaker", () => {
+  /** A renderer standing in for the kokoroSynth the service already holds. */
+  const harness = (
+    render: (text: string) => Promise<Buffer | null> = async () =>
+      wavFromPcm(Buffer.from([1, 2, 3, 4]), 24_000),
+  ) => {
+    const fake = fakeSpawner();
+    const problems: string[] = [];
+    const asked: string[] = [];
+    const speaker = synthSpeaker({
+      render: (text) => {
+        asked.push(text);
+        return render(text);
+      },
+      play: "ffplay",
+      spawn: fake.spawn,
+      onProblem: (why) => problems.push(why),
+    });
+    return { speaker, fake, problems, asked };
+  };
+
+  test("speaks through the renderer it was handed, not a Kokoro of its own", async () => {
+    const h = harness();
+    h.speaker.speak("Done.");
+    await h.speaker.drain!(1_000);
+
+    assert.deepEqual(h.asked, ["Done."]);
+    assert.equal(
+      h.fake.spawned.filter((s) => s.command !== "ffplay").length,
+      0,
+      "a second Kokoro next to the hub's is another 1.1GB of the same model",
+    );
+    h.speaker.stop();
+  });
+
+  test("the samples reach the player without the wav header", async () => {
+    const h = harness();
+    h.speaker.speak("Done.");
+    await h.speaker.drain!(1_000);
+
+    assert.deepEqual(
+      h.fake.last().proc.written,
+      Buffer.from([1, 2, 3, 4]),
+      "a header played as audio is a burst of noise",
+    );
+    h.speaker.stop();
+  });
+
+  test("sentences are played in the order they were written, not the order they render", async () => {
+    const holding: (() => void)[] = [];
+    const h = harness((text) =>
+      new Promise((done) =>
+        holding.push(() => done(wavFromPcm(Buffer.from(text, "ascii"), 24_000))),
+      ),
+    );
+    h.speaker.speak("aa");
+    h.speaker.speak("bb");
+    await settle();
+
+    // Only one render is ever in flight, so the second cannot overtake.
+    assert.equal(holding.length, 1, "two renders at once would arrive in either order");
+    holding[0]();
+    await settle();
+    holding[1]?.();
+    await h.speaker.drain!(1_000);
+    assert.equal(h.fake.last().proc.written.toString("ascii"), "aabb");
+    h.speaker.stop();
+  });
+
+  test("one player for the whole conversation", async () => {
+    const h = harness();
+    h.speaker.speak("One.");
+    h.speaker.speak("Two.");
+    await h.speaker.drain!(1_000);
+    assert.equal(h.fake.spawned.length, 1, "a player per sentence costs ~450ms each");
+    h.speaker.stop();
+  });
+
+  test("a renderer that gives nothing back is silence, not a crash", async () => {
+    const h = harness(async () => null);
+    h.speaker.speak("Done.");
+    await h.speaker.drain!(1_000);
+    assert.equal(h.fake.spawned.length, 0, "nothing to play means nothing to open");
+    h.speaker.stop();
+  });
+
+  test("says so once when what comes back isn't a wav", async () => {
+    const h = harness(async () => Buffer.from("not a wav at all"));
+    h.speaker.speak("One.");
+    h.speaker.speak("Two.");
+    await h.speaker.drain!(1_000);
+    assert.equal(h.problems.length, 1, "a broken renderer must not narrate every sentence");
+    h.speaker.stop();
+  });
+
+  test("nothing is spoken after it stops", async () => {
+    const h = harness();
+    h.speaker.stop();
+    h.speaker.speak("Done.");
+    await settle();
+    assert.deepEqual(h.asked, [], "a shutting-down service must not start rendering");
   });
 });

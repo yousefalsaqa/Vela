@@ -660,6 +660,77 @@ export function kokoroSpeaker(opts: {
   };
 }
 
+/**
+ * Speak out loud through a renderer that already exists.
+ *
+ * kokoroSpeaker owns a worker, a player and the protocol between them, which
+ * is right for the terminal, where there is nothing else to share with. The
+ * service already holds a kokoroSynth for the hub, and standing a second
+ * Kokoro up next to it to answer the wake word would be another 1.1GB of the
+ * same model. This is the missing half: something that turns her text into
+ * sound locally, and gets the sound from whoever already has it.
+ */
+export function synthSpeaker(opts: {
+  /** Text in, a wav out. kokoroSynth.render, in practice. */
+  render: (text: string) => Promise<Buffer | null>;
+  play?: string;
+  /** Silence inserted between her sentences. See pcmPlayer. */
+  gapMs?: number;
+  onProblem?: (why: string) => void;
+  /** Fires when a sentence's samples reach the player, i.e. when she starts. */
+  onSpoke?: () => void;
+  spawn?: Spawner;
+}): SpeakerHandle {
+  let queue: Promise<void> = Promise.resolve();
+  let stopped = false;
+
+  let complained = false;
+  const complain = (why: string) => {
+    if (complained) return;
+    complained = true;
+    opts.onProblem?.(why);
+  };
+
+  const player = pcmPlayer({
+    play: opts.play,
+    // Kokoro's own rate, which is what the renderer hands back.
+    sampleRate: 24_000,
+    gapMs: opts.gapMs,
+    onProblem: complain,
+    spawn: opts.spawn,
+  });
+
+  const utter = async (text: string) => {
+    if (stopped) return;
+    const wav = await opts.render(text);
+    if (stopped || !wav) return;
+    const pcm = pcmFromWav(wav);
+    if (!pcm) {
+      complain("the renderer sent back something that isn't a wav");
+      return;
+    }
+    player.write(pcm, gapFor(text, opts.gapMs ?? 0));
+    opts.onSpoke?.();
+  };
+
+  return {
+    speak(text: string) {
+      if (stopped) return;
+      // Serialised, because the sentences have to reach the player in the
+      // order they were written.
+      queue = queue.then(() => utter(text)).catch(() => {});
+    },
+    async drain(timeoutMs = 30_000) {
+      await Promise.race([queue, new Promise((r) => setTimeout(r, timeoutMs).unref?.())]);
+      await player.drain(timeoutMs);
+    },
+    stop() {
+      stopped = true;
+      player.stop();
+    },
+  };
+}
+
 export function createVoice(
   speak: Speaker,
   pronounce: [RegExp, string][] = PRONOUNCE_RESPELL,

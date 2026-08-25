@@ -11,6 +11,8 @@ import {
   normalise,
   levelDb,
   startRecording,
+  openMic,
+  captureArgs,
   createTranscriber,
   cliTranscriber,
   resolveWinGetBinary,
@@ -677,5 +679,79 @@ describe("pcmFromAudio", () => {
   test("a conversion that fails is silence, which reads as 'didn't catch that'", async () => {
     const fake = fakeSpawner((s) => setImmediate(() => s.proc.emit("error", new Error("ENOENT"))));
     assert.equal((await pcmFromAudio(Buffer.from("x"), { spawn: fake.spawn })).length, 0);
+  });
+});
+
+describe("captureArgs", () => {
+  test("asks for exactly what whisper reads: mono, 16 kHz, signed 16-bit", () => {
+    const args = captureArgs("Microphone Array");
+    assert.equal(args[args.indexOf("-ac") + 1], "1");
+    assert.equal(args[args.indexOf("-ar") + 1], String(SAMPLE_RATE));
+    assert.equal(args[args.indexOf("-f", args.indexOf("-ar")) + 1], "s16le");
+  });
+
+  test("the device name goes in whole, because dshow matches it exactly", () => {
+    const args = captureArgs("Microphone Array (Intel® Smart Sound)");
+    assert.equal(args[args.indexOf("-i") + 1], "audio=Microphone Array (Intel® Smart Sound)");
+  });
+});
+
+describe("openMic", () => {
+  test("hands over chunks as they arrive rather than at the end", async () => {
+    const fake = fakeSpawner();
+    const chunks: Buffer[] = [];
+    const mic = openMic("mic", { spawn: fake.spawn, onAudio: (c) => chunks.push(c) });
+
+    fake.last().proc.stdout.write(Buffer.from([1, 2]));
+    await settle();
+    // Nothing has stopped, so a recorder would still be holding all of this.
+    assert.equal(chunks.length, 1, "a wake word cannot wait for the end of an utterance");
+    mic.close();
+  });
+
+  test("ready waits for samples, not for the process, because dshow takes ~1.3s to open", async () => {
+    const fake = fakeSpawner();
+    let capturing = false;
+    const mic = openMic("mic", { spawn: fake.spawn, onAudio: () => {} });
+    void mic.ready.then(() => (capturing = true));
+
+    await settle();
+    assert.equal(capturing, false, "spawned is not the same as listening");
+    fake.last().proc.stdout.write(Buffer.from([1, 2]));
+    await settle();
+    assert.equal(capturing, true);
+    mic.close();
+  });
+
+  test("a device pulled out of the socket reports the end once, not twice", async () => {
+    const fake = fakeSpawner();
+    const ends: string[] = [];
+    openMic("mic", { spawn: fake.spawn, onAudio: () => {}, onEnd: (why) => ends.push(why) });
+
+    // Real ffmpeg fires both when the device disappears.
+    fake.last().proc.fail("I/O error");
+    fake.last().proc.close();
+    await settle();
+    assert.equal(ends.length, 1, "a caller that reopens per event opens two microphones");
+  });
+
+  test("closing it is not an end, because the caller asked for it", async () => {
+    const fake = fakeSpawner();
+    const ends: string[] = [];
+    const mic = openMic("mic", { spawn: fake.spawn, onAudio: () => {}, onEnd: (why) => ends.push(why) });
+
+    mic.close();
+    await settle();
+    assert.equal(ends.length, 0, "a listener that reopens on its own shutdown never shuts down");
+    assert.equal(fake.last().proc.killed, true);
+  });
+
+  test("ready resolves even if the microphone never opens at all", async () => {
+    const fake = fakeSpawner();
+    const mic = openMic("mic", { spawn: fake.spawn, onAudio: () => {} });
+    fake.last().proc.fail("no such device");
+    // A caller waiting on a device that will never open waits forever.
+    await mic.ready;
+    mic.close();
   });
 });

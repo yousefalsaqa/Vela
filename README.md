@@ -611,9 +611,10 @@ VELA_LISTEN=off npm run dev
 
 Push-to-talk: **Enter on an empty line starts recording, Enter again stops it**,
 and the transcript goes into the same queue a typed line would. Using the input
-that already exists beats a global-hotkey dependency, and it's deliberately not
-a wake word — "Hey Vela" means training a model on synthetic speech, which is
-worth doing only once the loop has proved itself.
+that already exists beats a global-hotkey dependency. The terminal stays
+push-to-talk on purpose: if a window is already open, pressing Enter is less
+work than saying a name. The service listens for the name instead — see [the
+wake word](#the-wake-word).
 
 ffmpeg captures the microphone and whisper transcribes it. Both were installed
 with `winget` and `uv` respectively.
@@ -688,6 +689,98 @@ inference, so the GPU never gets to matter. The first CUDA run took 21.7s — an
 RTX 5060 is Blackwell (`sm_120`), newer than CTranslate2's prebuilt kernels, so
 it JIT-compiled them once and cached them. Worth revisiting only for long
 recordings or a much bigger model.
+
+## The wake word
+
+```bash
+npm run serve              # she answers to her name
+VELA_WAKE=off npm run serve
+VELA_WAKE_DEBUG=on npm run serve   # print every transcript and its level
+```
+
+Say **"Vela, what's on my calendar"** and she answers out loud. Say just
+**"Vela"** and she says "Yes?". Only the background service does this; the
+terminal has push-to-talk, and two processes holding the same microphone is one
+of them getting silence.
+
+**It is not a wake-word model.** [listen.ts](src/listen.ts) used to say a wake
+word meant training one on synthetic speech, and that is still true of the
+usual approach and still not what this is. The microphone stays open, an energy
+gate cuts the room into utterances, and the whisper worker that already exists
+reads each one. What that trades is worth being plain about: a real wake model
+runs on a 30ms frame for almost no CPU, where a whisper pass costs ~0.4s and
+runs on everything said near the machine — locally, and nothing leaves it, but
+on everything. In exchange there is no model to train, no new dependency, and
+the decoder that already knows his voice does the recognising. The gate is the
+seam: put a real wake model in front of it and whisper only sees what it
+passes.
+
+**Silence costs nothing.** The gate is what makes this affordable to leave on
+all day. Nothing that isn't louder than the room ever becomes an utterance, so
+an idle Vela with her ears open is the same idle Vela as before — no
+transcription, no model call, nothing.
+
+**The bar is relative, not fixed.** His microphone puts speech at about -49
+dBFS, far below where any fixed threshold would sit, and a different room moves
+that number again. So the gate learns what quiet sounds like here and asks only
+that speech be louder than it, falling to a quiet room quickly and rising to a
+noisy one slowly. It stops learning while he is talking — a floor that learned
+from his voice would close the gate in the middle of his sentence — and it is
+capped below where speech lives, so a fan starting up cannot raise the bar
+until she goes deaf.
+
+**The utterance carries the moment before it.** 600ms of pre-roll rides in
+front of the opening frame, because the wake word is the *first* thing said and
+a gate that starts recording once it is sure would clip the name off every
+time.
+
+**She doesn't hear herself.** The speakers are in the same room as the
+microphone, so she stops listening while she talks and starts again once the
+audio has actually finished playing. Without that she transcribes her own
+reply, hears her own name in it, and answers it.
+
+Waiting costs something: the player has to close for her to know the room is
+quiet, so the next reply starts a fresh `ffplay` and pays its ~450ms startup
+before the first word. The terminal keeps one player for a whole conversation
+and pays that once, but it has a key press telling it when a turn begins.
+Nothing here says when she has finished being heard except the player closing.
+
+**The name isn't needed twice.** For eight seconds after a turn, the next thing
+he says is taken as a turn without it — otherwise a conversation becomes a
+command line. The window is measured from when she *stops* talking, not when
+she started, so a long answer doesn't eat it.
+
+**Her name is a list, not a word.** `base.en` has never heard "Vela" and
+reaches for the nearest real word, so `villa`, `bella` and `vella` all count.
+The name has to be at the front of the utterance or at the very end — "Vela,
+what time is it" or "what time is it, Vela". A name in the middle is him
+talking *about* her to someone else, and answering that is worse than missing
+it.
+
+She speaks these replies through the Kokoro the service already holds for the
+hub, rather than a second copy of the same 1.1GB model. Only turns the wake
+word started are played out here: a sentence typed into the hub is the
+browser's to say, or it would be said twice.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VELA_WAKE` | `on` | `off` releases the microphone entirely |
+| `VELA_WAKE_WORDS` | `vela` and its mishearings | Comma-separated; replaces the list, so it can turn one off |
+| `VELA_WAKE_FOLLOWUP` | `8000` | Milliseconds she keeps listening after a turn; `0` requires the name every time |
+| `VELA_WAKE_MARGIN` | `8` | dB over the room before a sound is speech. Lower hears more, including the keyboard |
+| `VELA_WAKE_MAX` | `15000` | Longest single utterance sent to whisper |
+| `VELA_WAKE_ACK` | `Yes?` | What she says to her name alone |
+| `VELA_WAKE_DEBUG` | `off` | Print every transcript with its level and whether it woke her |
+
+**When it goes wrong, `VELA_WAKE_DEBUG=on` says which way.** She never answers,
+or she answers the television, and from outside those look identical and have
+opposite fixes. The debug line shows which is happening, and the level printed
+next to each transcript is what `VELA_WAKE_MARGIN` should be set against.
+
+"Yes?" is canned rather than a model turn on purpose. He has said one word and
+is waiting to hear whether she heard it; a second and a half of thinking to
+produce "yes?" is the wrong trade, and a different acknowledgement every time
+is worse than the same one.
 
 ## Browser history
 
@@ -925,3 +1018,4 @@ you add to this list, bump it.
 | 3.1.0 | A desk he can arrange. The work she is doing and the thing she is showing became panels he drags where he wants and that stay there, and the audio circle went, since the room has real content in it now. |
 | 3.2.0 | She survives losing the model. A session that dies now surfaces the drop and stands itself back up instead of leaving her silently stuck, so a hit usage limit is a pause rather than a wedge. The work panel arrives with the first tool and leaves with the turn; talking over her stops her instead of reading into the mic. |
 | 3.2.1 | A keep toggle on the Work panel pins it open between turns, remembered across reloads, for watching a long run from one place. |
+| 3.3.0 | She hears the room. The service holds the microphone open and answers to her name, out loud, with no window open and nothing pressed — an energy gate keeps silence free, and the whisper worker she already had does the recognising rather than a wake model trained for it. |
