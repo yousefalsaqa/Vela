@@ -391,6 +391,22 @@ export const WAKE_MARGIN_DB = Number(process.env.VELA_WAKE_MARGIN ?? "8");
 export const WAKE_MAX_MS = Number(process.env.VELA_WAKE_MAX ?? "15000");
 
 /**
+ * How sure whisper has to be that it heard silence before she ignores it.
+ *
+ * The gate in wake.ts decides whether a sound was loud enough to be speech.
+ * This decides whether it *was* speech, which is a different question and the
+ * one that was missing: handed room tone that cleared the loudness bar, whisper
+ * does not return nothing, it invents a fluent sentence — and a sentence that
+ * happens to contain her name is indistinguishable from being addressed.
+ *
+ * Higher lets more through. See saidSomething in listen.ts for the numbers.
+ */
+export const WHISPER_MAX_SILENCE = Number(process.env.VELA_SILENCE ?? "0.5");
+
+/** And how badly whisper may doubt the words themselves. Lower lets more through. */
+export const WHISPER_MIN_LOGPROB = Number(process.env.VELA_LOGPROB ?? "-1.0");
+
+/**
  * What she says when he says only her name.
  *
  * Canned rather than a model turn on purpose. He has just said one word and is

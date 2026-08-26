@@ -38,6 +38,8 @@ import {
   WHISPER_MODEL,
   WHISPER_DEVICE,
   WHISPER_VOCABULARY,
+  WHISPER_MAX_SILENCE,
+  WHISPER_MIN_LOGPROB,
   KOKORO_PYTHON,
   KOKORO_WORKER,
   KOKORO_VOICE,
@@ -121,6 +123,8 @@ async function main() {
         vocabulary: WHISPER_VOCABULARY,
         // She sits idle most of the day; the model can wait until he speaks.
         lazy: LAZY_WORKERS,
+        maxSilence: WHISPER_MAX_SILENCE,
+        minLogprob: WHISPER_MIN_LOGPROB,
         onProblem: (why) => console.log(`  Transcription: ${why}`),
       })
     : cliTranscriber({ model: WHISPER_MODEL, computeDevice: WHISPER_DEVICE });

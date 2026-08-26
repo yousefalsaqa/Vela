@@ -14,6 +14,7 @@ import {
   openMic,
   captureArgs,
   createTranscriber,
+  saidSomething,
   cliTranscriber,
   resolveWinGetBinary,
   audioDevices,
@@ -654,6 +655,48 @@ describe("cleanTranscript", () => {
 
   test("collapses whisper's line wrapping", () => {
     assert.equal(cleanTranscript("open the\nfantasy project"), "open the fantasy project");
+  });
+});
+
+describe("saidSomething", () => {
+  // The numbers here are what faster-whisper actually reports: real close-mic
+  // speech through base.en sits near no_speech_prob 0.02 and avg_logprob -0.3,
+  // and audio it is confident was silence comes back near 0.9.
+  const speech = { text: "open the fantasy project", silence: 0.02, logprob: -0.31 };
+
+  test("keeps speech the decoder was sure about", () => {
+    assert.equal(saidSomething(speech), true);
+  });
+
+  test("drops a fluent sentence the decoder thinks was silence", () => {
+    // This is the failure the whole change exists for. cleanTranscript cannot
+    // catch it: the text is novel, grammatical, and indistinguishable from a
+    // real instruction. Only the numbers know nobody said it.
+    assert.equal(saidSomething({ text: "Vela, run doggy run doggy.", silence: 0.91, logprob: -0.4 }), false);
+  });
+
+  test("drops words the decoder barely believed in", () => {
+    // Confident it was speech, unsure what the speech was. Gibberish scores
+    // here rather than on no_speech_prob.
+    assert.equal(saidSomething({ text: "zabatongshu", silence: 0.2, logprob: -2.4 }), false);
+  });
+
+  test("lets a transcript with no numbers through", () => {
+    // The CLI fallback reports neither. Missing evidence is not evidence of
+    // silence — dropping every utterance on that path would make the fallback
+    // deaf rather than slow.
+    assert.equal(saidSomething({ text: "open chrome" }), true);
+  });
+
+  test("says nothing was said when there is no text", () => {
+    assert.equal(saidSomething({ text: "", silence: 0.01, logprob: -0.2 }), false);
+  });
+
+  test("takes the caller's bar rather than the default", () => {
+    // Because the right threshold is a property of his room and his
+    // microphone, and he is going to have to move it.
+    assert.equal(saidSomething(speech, { maxSilence: 0.01 }), false);
+    assert.equal(saidSomething({ ...speech, silence: 0.8 }, { maxSilence: 0.9 }), true);
   });
 });
 

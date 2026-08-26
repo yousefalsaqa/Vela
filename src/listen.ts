@@ -374,6 +374,62 @@ export function wavFromPcm(pcm: Buffer, rate = SAMPLE_RATE): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
+/**
+ * How sure the decoder was that it was decoding speech.
+ *
+ * `silence` is whisper's own probability that the audio was nothing at all;
+ * `logprob` is how likely it thought the words it picked were. Both are
+ * absent on the CLI path, which does not report them.
+ */
+export interface Heard {
+  text: string;
+  silence?: number;
+  logprob?: number;
+}
+
+/**
+ * The bar an utterance has to clear to be treated as something he said.
+ *
+ * faster-whisper's own convention is that `no_speech_prob` over 0.6 is
+ * silence. This sits tighter, because the two failures are not symmetric: a
+ * dropped utterance costs him saying it again, and a hallucinated one costs a
+ * wake word firing on a sentence nobody spoke. Move it with VELA_SILENCE.
+ */
+export const MAX_SILENCE = 0.5;
+
+/**
+ * And how badly it was allowed to doubt the words themselves.
+ *
+ * Real close-mic speech through base.en sits around -0.3 to -0.5. Invented
+ * text runs well below that, because there was never any audio agreeing with
+ * it. -1.0 is loose on purpose: this is the second gate, not the first, and
+ * accented or quiet real speech should still get through.
+ */
+export const MIN_LOGPROB = -1.0;
+
+/**
+ * Was that speech, or was it whisper filling silence?
+ *
+ * cleanTranscript catches the hallucinations whisper repeats — "You.", "Thank
+ * you.", "[BLANK_AUDIO]" — by name, and that list is exact-match by nature. It
+ * cannot catch a novel one. These two numbers can, because they describe the
+ * audio rather than the words, and room tone scores badly whatever sentence it
+ * gets turned into.
+ */
+export function saidSomething(
+  heard: Heard,
+  limits: { maxSilence?: number; minLogprob?: number } = {},
+): boolean {
+  if (!heard.text) return false;
+  const maxSilence = limits.maxSilence ?? MAX_SILENCE;
+  const minLogprob = limits.minLogprob ?? MIN_LOGPROB;
+  // Absent means the CLI path, which reports neither. Missing evidence is not
+  // evidence of silence: let it through and leave it to cleanTranscript.
+  if (heard.silence !== undefined && heard.silence > maxSilence) return false;
+  if (heard.logprob !== undefined && heard.logprob < minLogprob) return false;
+  return true;
+}
+
 export interface Transcriber {
   /** Raw 16 kHz mono samples in, what was said out. */
   hear: (pcm: Buffer) => Promise<string>;
@@ -415,6 +471,10 @@ export function createTranscriber(opts: {
    * once it has started.
    */
   lazy?: boolean;
+  /** How sure of silence whisper has to be before this is thrown away. */
+  maxSilence?: number;
+  /** How badly it may doubt its own words. See saidSomething. */
+  minLogprob?: number;
   onProblem?: (why: string) => void;
   spawn?: Spawner;
 }): Transcriber {
@@ -490,7 +550,12 @@ export function createTranscriber(opts: {
       }
       try {
         // JSON, because speech has quotes and newlines in it.
-        return cleanTranscript(JSON.parse(status.slice(3)).text ?? "");
+        const said = JSON.parse(status.slice(3)) as Heard;
+        const text = cleanTranscript(said.text ?? "");
+        // Weighed after cleaning, so the confidence numbers are judged against
+        // the text that would actually have become a turn.
+        if (!saidSomething({ ...said, text }, opts)) return "";
+        return text;
       } catch {
         complain("whisper sent back something that isn't JSON");
         return "";

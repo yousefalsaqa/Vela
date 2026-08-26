@@ -6,9 +6,14 @@ This keeps the model resident, the same way the Kokoro worker does for speech.
 
 Protocol, one JSON object per line in, one status line out:
     in : {"pcm": "C:/tmp/take.pcm", "rate": 16000}
-    out: ok {"text": "open the fantasy project"}   (JSON, because speech has
-                                                    newlines and quotes in it)
+    out: ok {"text": "open the fantasy project", "silence": 0.02, "logprob": -0.31}
          err <message>
+
+The two numbers beside the text are how sure the decoder was that it was
+decoding anything at all. Whisper does not return nothing when handed room
+tone: it returns a sentence, confidently punctuated, that was never said. The
+text alone cannot be told apart from speech, so the caller needs the numbers to
+throw it away. See `silence` and `logprob` below for what they mean.
 
 Audio arrives as raw signed 16-bit mono PCM — no container. The recorder pipes
 it straight out of ffmpeg, so there is no header to finalise and no wait for
@@ -81,7 +86,23 @@ for line in sys.stdin:
             # is how whisper talks itself into repeating a previous sentence.
             condition_on_previous_text=False,
         )
-        text = " ".join(segment.text.strip() for segment in segments).strip()
-        print(f"ok {json.dumps({'text': text})}", flush=True)
+        # Consumed once: the generator decodes lazily, so the segments have to
+        # be held to be measured as well as joined.
+        found = list(segments)
+        text = " ".join(segment.text.strip() for segment in found).strip()
+
+        # How sure it was that the audio was silence, and how likely it thought
+        # the words it chose were.
+        #
+        # Taken at their worst rather than averaged. A hallucination is usually
+        # one confident segment riding alongside a doubtful one, and a mean
+        # lets the confident half hide the other. The caller is deciding
+        # whether this was speech at all, so it should see the weakest link.
+        silence = max((segment.no_speech_prob for segment in found), default=1.0)
+        logprob = min((segment.avg_logprob for segment in found), default=-10.0)
+        print(
+            f"ok {json.dumps({'text': text, 'silence': silence, 'logprob': logprob})}",
+            flush=True,
+        )
     except Exception as exc:  # noqa: BLE001 - one bad line must not kill the worker
         print(f"err {exc}", flush=True)
