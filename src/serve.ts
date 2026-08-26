@@ -12,6 +12,7 @@ import {
   audioDevices,
   pickDevice,
   HEARD_ANYTHING,
+  UNPROMPTED,
 } from "./listen.js";
 import { kokoroSynth, synthSpeaker, createVoice, PRONOUNCE_PHONEMES } from "./voice.js";
 import { startWakeListener, type WakeListener } from "./wake.js";
@@ -54,6 +55,7 @@ import {
   WAKE_DEBUG,
   WAKE_MARGIN_DB,
   WAKE_MAX_MS,
+  WAKE_FLOOR_MAX,
   WAKE_FOLLOWUP_MS,
   WAKE_FOLLOWUPS,
   WAKE_BYE,
@@ -251,8 +253,12 @@ async function main() {
       words: WAKE_WORDS,
       followUpMs: WAKE_FOLLOWUP_MS,
       followUps: WAKE_FOLLOWUPS,
-      segment: { marginDb: WAKE_MARGIN_DB, maxMs: WAKE_MAX_MS },
-      hear: (pcm) => ears.hear(pcm),
+      segment: { marginDb: WAKE_MARGIN_DB, maxMs: WAKE_MAX_MS, floorMax: WAKE_FLOOR_MAX },
+      // No prior, because nobody has promised that anyone spoke. A decoder
+      // primed with her name is a decoder that writes her name when guessing,
+      // and today it did: "For a second, Kokoro" came out of a quiet room with
+      // Kokoro sitting second in the vocabulary. See UNPROMPTED.
+      hear: (pcm) => ears.hear(pcm, UNPROMPTED),
 
       onCommand: (text, woke) => {
         const how = woke.followUp ? "follow-up" : woke.word;

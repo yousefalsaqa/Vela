@@ -5,7 +5,7 @@ air between Yousef finishing a sentence and Vela starting to think about it.
 This keeps the model resident, the same way the Kokoro worker does for speech.
 
 Protocol, one JSON object per line in, one status line out:
-    in : {"pcm": "C:/tmp/take.pcm", "rate": 16000}
+    in : {"pcm": "C:/tmp/take.pcm", "rate": 16000, "prompt": "Vela, Kokoro"}
     out: ok {"text": "open the fantasy project", "silence": 0.02, "logprob": -0.31}
          err <message>
 
@@ -14,6 +14,13 @@ decoding anything at all. Whisper does not return nothing when handed room
 tone: it returns a sentence, confidently punctuated, that was never said. The
 text alone cannot be told apart from speech, so the caller needs the numbers to
 throw it away. See `silence` and `logprob` below for what they mean.
+
+`prompt` is optional and overrides the startup vocabulary for that one
+utterance, empty string included. It exists because the bias cuts both ways:
+biasing towards his own words is worth 2.5 points of word error when he has
+definitely spoken, and is actively harmful when the caller does not know
+whether anyone spoke at all. A decoder primed with "Vela" hands back "Vela"
+when it is guessing.
 
 Audio arrives as raw signed 16-bit mono PCM — no container. The recorder pipes
 it straight out of ffmpeg, so there is no header to finalise and no wait for
@@ -71,13 +78,17 @@ for line in sys.stdin:
         # int16 -> the float32 in [-1, 1] that whisper expects.
         audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
+        # Absent means the startup vocabulary; present means this utterance
+        # only, and "" means decode with no prior at all.
+        prompt = request.get("prompt", vocabulary)
+
         segments, _ = model.transcribe(
             audio,
             language="en",
             # A beam of 1 saves ~25ms and costs 2.4 points of word error. He
             # notices the errors and not the 25ms.
             beam_size=5,
-            initial_prompt=vocabulary or None,
+            initial_prompt=prompt or None,
             # Trim the silence either side of the push-to-talk press. Less audio
             # to decode, and fewer of the hallucinations whisper produces when
             # handed room tone.

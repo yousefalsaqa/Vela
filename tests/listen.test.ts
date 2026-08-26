@@ -16,6 +16,7 @@ import {
   createTranscriber,
   saidSomething,
   HEARD_ANYTHING,
+  UNPROMPTED,
   cliTranscriber,
   resolveWinGetBinary,
   audioDevices,
@@ -328,6 +329,52 @@ describe("createTranscriber", () => {
       dropped,
       ["Vela, run doggy run doggy."],
       "a bar nobody can see is a bar he cannot move",
+    );
+    ears.stop();
+  });
+
+  test("an open microphone decodes with no prior, so whisper cannot be led", async () => {
+    const asked: Record<string, unknown>[] = [];
+    const fake = fakeSpawner(({ proc }) =>
+      respondToRequests(proc, (request) => {
+        asked.push(request);
+        return heard("vela")();
+      }),
+    );
+    const ears = createTranscriber({
+      python: "python.exe",
+      worker: "whisper_worker.py",
+      vocabulary: "Vela, Kokoro, ffmpeg",
+      spawn: fake.spawn,
+    });
+    await ears.hear(Buffer.alloc(320), UNPROMPTED);
+    assert.equal(
+      asked[0].prompt,
+      "",
+      "priming the decoder with her name is what made it write her name from noise",
+    );
+    ears.stop();
+  });
+
+  test("a caller that says nothing about the prior keeps the worker's own", async () => {
+    const asked: Record<string, unknown>[] = [];
+    const fake = fakeSpawner(({ proc }) =>
+      respondToRequests(proc, (request) => {
+        asked.push(request);
+        return heard("open the fantasy project")();
+      }),
+    );
+    const ears = createTranscriber({
+      python: "python.exe",
+      worker: "whisper_worker.py",
+      vocabulary: "Vela, Kokoro, ffmpeg",
+      spawn: fake.spawn,
+    });
+    await ears.hear(Buffer.alloc(320), HEARD_ANYTHING);
+    assert.equal(
+      "prompt" in asked[0],
+      false,
+      "push-to-talk still wants the vocabulary, which is worth 2.5 points of error",
     );
     ears.stop();
   });

@@ -421,6 +421,19 @@ export interface Limits {
   minLogprob?: number;
 }
 
+/** What may be decided for one utterance rather than for the whole worker. */
+export interface HearOptions extends Limits {
+  /**
+   * The decoder's prior for this utterance. "" is no prior at all.
+   *
+   * Biasing towards his own vocabulary is worth 2.5 points of word error when
+   * he has definitely spoken. It is the opposite when the caller is guessing
+   * that anyone spoke: whisper handed room tone and primed with her name gives
+   * back her name, and a sentence carrying it cannot be told from an address.
+   */
+  vocabulary?: string;
+}
+
 /**
  * Limits that let everything through.
  *
@@ -430,6 +443,14 @@ export interface Limits {
  * standard would throw away the quiet real sentence it exists to catch.
  */
 export const HEARD_ANYTHING: Limits = { maxSilence: 1, minLogprob: -Infinity };
+
+/**
+ * Decode with no prior, and hold what comes back to the strict bar.
+ *
+ * What an open microphone should ask for. It cannot promise anyone spoke, so it
+ * gets neither the benefit of the doubt nor the words that would flatter it.
+ */
+export const UNPROMPTED: HearOptions = { vocabulary: "" };
 
 export function saidSomething(heard: Heard, limits: Limits = {}): boolean {
   if (!heard.text) return false;
@@ -450,7 +471,7 @@ export interface Transcriber {
    * transcriber serves both a held key and an open microphone and those two
    * deserve different answers. See HEARD_ANYTHING.
    */
-  hear: (pcm: Buffer, limits?: Limits) => Promise<string>;
+  hear: (pcm: Buffer, over?: HearOptions) => Promise<string>;
   /**
    * Start loading the model now, if it isn't already.
    *
@@ -555,7 +576,10 @@ export function createTranscriber(opts: {
   if (!opts.lazy) ensureWorker();
 
   return {
-    async hear(pcm: Buffer, limits?: Limits) {
+    async hear(pcm: Buffer, over?: HearOptions) {
+      // The worker's settings are the default and the caller's win, so a caller
+      // that speaks to only one of them does not silently drop the others.
+      const eff = { ...opts, ...over };
       if (stopped || !pcm.length) return "";
       const live = ensureWorker();
       if (!live.stdin?.writable) return "";
@@ -564,7 +588,14 @@ export function createTranscriber(opts: {
 
       const status = await new Promise<string>((done) => {
         waiting.push(done);
-        live.stdin!.write(`${JSON.stringify({ pcm: file, rate: SAMPLE_RATE })}\n`);
+        live.stdin!.write(
+          `${JSON.stringify({
+            pcm: file,
+            rate: SAMPLE_RATE,
+            // Sent only when a caller decided it, so the worker keeps its own.
+            ...(over?.vocabulary === undefined ? {} : { prompt: over.vocabulary }),
+          })}\n`,
+        );
         setTimeout(() => done("err timed out"), 120_000).unref?.();
       });
       rmSync(file, { force: true });
@@ -580,7 +611,7 @@ export function createTranscriber(opts: {
         // Weighed after cleaning, so the confidence numbers are judged against
         // the text that would actually have become a turn.
         const weighed: Heard = { ...said, text };
-        if (!saidSomething(weighed, limits ?? opts)) {
+        if (!saidSomething(weighed, eff)) {
           if (text) opts.onDropped?.(weighed);
           return "";
         }
@@ -616,7 +647,7 @@ export function cliTranscriber(opts: ListenOptions = {}): Transcriber {
   const dir = mkdtempSync(join(tmpdir(), "vela-heard-"));
   let n = 0;
   return {
-    async hear(pcm: Buffer, _limits?: Limits) {
+    async hear(pcm: Buffer, _over?: HearOptions) {
       if (!pcm.length) return "";
       const wav = join(dir, `${n++}.wav`);
       writeFileSync(wav, wavFromPcm(normalise(pcm)));

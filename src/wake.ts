@@ -181,6 +181,17 @@ export interface SegmentOptions {
   minMs?: number;
   /** Longer than this is cut, so one long noise cannot hold the gate open. */
   maxMs?: number;
+  /**
+   * The loudest the room is allowed to be taken for.
+   *
+   * Calibrated against a microphone that put speech at -49 dBFS. Turn the input
+   * gain up and everything moves with it: the room rises past this ceiling, the
+   * bar stops rising with it, and every noise in the room clears a threshold
+   * that can no longer get out of its way. It belongs a few dB under the
+   * quietest speech worth catching, which is a property of the microphone and
+   * not of this file.
+   */
+  floorMax?: number;
   frameMs?: number;
   rate?: number;
 }
@@ -196,7 +207,7 @@ export interface SegmentOptions {
  * nothing would be an utterance.
  */
 const FLOOR_MIN = -85;
-const FLOOR_MAX = -55;
+export const FLOOR_MAX = -55;
 
 export interface Segmenter {
   /** Feed it whatever came off the microphone. */
@@ -226,6 +237,7 @@ export function createSegmenter(
   const rate = opts.rate ?? SAMPLE_RATE;
   const frameMs = opts.frameMs ?? 100;
   const marginDb = opts.marginDb ?? 8;
+  const floorMax = opts.floorMax ?? FLOOR_MAX;
   const hangoverMs = opts.hangoverMs ?? 700;
   const preRollMs = opts.preRollMs ?? 600;
   const minMs = opts.minMs ?? 400;
@@ -275,7 +287,7 @@ export function createSegmenter(
         : level < floor
           ? floor + 0.4 * (level - floor)
           : floor + 0.02 * (level - floor);
-      floor = Math.min(FLOOR_MAX, Math.max(FLOOR_MIN, floor));
+      floor = Math.min(floorMax, Math.max(FLOOR_MIN, floor));
     }
 
     const speaking = level > floor + marginDb;

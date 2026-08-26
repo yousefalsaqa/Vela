@@ -413,6 +413,18 @@ export const WAKE_MARGIN_DB = Number(process.env.VELA_WAKE_MARGIN ?? "8");
 export const WAKE_MAX_MS = Number(process.env.VELA_WAKE_MAX ?? "15000");
 
 /**
+ * The loudest the gate may believe the room is, in dBFS.
+ *
+ * The bar the gate applies is this plus VELA_WAKE_MARGIN, so this is what
+ * actually decides whether room tone gets transcribed. The default was
+ * measured against a microphone putting speech at -49 dBFS; turn the input gain
+ * up and the room can climb past it, at which point the bar stops rising and
+ * every noise clears it. Read the levels off VELA_WAKE_DEBUG and put this a few
+ * dB below the quietest "Vela" in the log.
+ */
+export const WAKE_FLOOR_MAX = Number(process.env.VELA_WAKE_FLOOR ?? "-55");
+
+/**
  * How sure whisper has to be that it heard silence before she ignores it.
  *
  * The gate in wake.ts decides whether a sound was loud enough to be speech.

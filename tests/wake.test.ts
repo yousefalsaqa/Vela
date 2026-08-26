@@ -266,6 +266,27 @@ describe("createSegmenter", () => {
     assert.equal(said.length, 1, "a fixed threshold would never hear this at all");
   });
 
+  test("a louder microphone can move the ceiling with it", async () => {
+    // The default ceiling was measured against a microphone putting speech at
+    // -49 dBFS. Turn the gain up and the room climbs past it, the bar stops
+    // rising, and room tone starts clearing a threshold it should not. The
+    // ceiling has to be able to follow the microphone.
+    const said: number[] = [];
+    const gate = createSegmenter((_pcm, level) => said.push(level), {
+      frameMs: 10,
+      minMs: 20,
+      hangoverMs: 30,
+      marginDb: 8,
+      floorMax: -30,
+    });
+    // A room at -40 with the ceiling raised: the bar sits at -32, and speech
+    // this loud is under it.
+    for (let i = 0; i < 60; i++) gate.push(tone(10, -40));
+    gate.push(tone(200, -36));
+    for (let i = 0; i < 10; i++) gate.push(tone(10, -40));
+    assert.equal(said.length, 0, "a ceiling that cannot rise is a room she transcribes all day");
+  });
+
   test("a loud room cannot raise the bar above where speech lives", () => {
     const { seg } = listening();
     seg.push(tone(60_000, -20)); // a minute of something very loud

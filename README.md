@@ -697,6 +697,16 @@ why it gets the strict one.
 `VELA_WAKE_DEBUG=on` prints every utterance the bar threw away, with both
 numbers, because a threshold nobody can see is a threshold he cannot move.
 
+**And the wake word decodes with no prior at all.** `WHISPER_VOCABULARY` biases
+the decoder towards his own words, which is worth 2.5 points of word error when
+he has definitely spoken — and is the opposite of helpful when the caller is
+only guessing that anyone spoke. Her name sat first in that list, so whisper,
+handed room tone and primed with "Vela", wrote back "Vela": the bias was
+manufacturing the exact word that wakes her. `For a second, Kokoro` came out of
+a quiet room with Kokoro second in the same list. The prompt is per-utterance
+now, so push-to-talk keeps the vocabulary that earns its place and the open
+microphone gets `UNPROMPTED`.
+
 **CPU is the default on purpose.** The CUDA runtime is installed (cuBLAS 12.9 and
 cuDNN 9.24, as pip wheels inside whisper's own venv rather than the 3GB toolkit),
 and `VELA_WHISPER_DEVICE=cuda` works. It just doesn't help, measured on a
@@ -814,6 +824,7 @@ browser's to say, or it would be said twice.
 | `VELA_WAKE_FOLLOWUP` | `0` | Milliseconds she keeps listening after a turn. `0` is one address, one sentence |
 | `VELA_WAKE_FOLLOWUPS` | `1` | Nameless sentences one address buys while that window is open. This is what a mis-fire costs |
 | `VELA_WAKE_MARGIN` | `8` | dB over the room before a sound is speech. Lower hears more, including the keyboard |
+| `VELA_WAKE_FLOOR` | `-55` | The loudest the gate may believe the room is, in dBFS. Raise it after raising the microphone's input gain |
 | `VELA_WAKE_MAX` | `15000` | Longest single utterance sent to whisper |
 | `VELA_WAKE_ACK` | `Yes?` | What she says to her name alone |
 | `VELA_WAKE_DEBUG` | `off` | Print every transcript with its level and whether it woke her |
