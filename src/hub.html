@@ -1393,6 +1393,11 @@ addEventListener("message", (e) => {
    Her voice: the same Kokoro the terminal uses
    ════════════════════════════════════════════════════════════════════════ */
 let speaking = false, canSpeak = false, speakingNow = false;
+/* She is saying this one out loud in the room already. The service tells us so,
+   because a tab has no way of knowing there is a microphone in front of it, and
+   two of her talking at once is worse than neither. Cleared on reconnect: a
+   stream that dropped mid-reply must not leave this tab mute for good. */
+let aloud = false;
 let audioQueue = [], playing = false, current = null, sound = null;
 // The teardown for the sentence sounding right now, so hush() can end it the
 // same way it would end on its own rather than pausing it half-alive.
@@ -1466,7 +1471,7 @@ async function enqueue(sentence, range) {
   // a URL out loud. The range stays in the coordinates of what is on screen,
   // which is what the reading head sweeps across.
   const said = forSaying(sentence).trim();
-  if (!said || !canSpeak || !speaking || cutSpeaking) return;
+  if (!said || !canSpeak || !speaking || cutSpeaking || aloud) return;
   audioQueue.push({ said, range: range || null, spans: (open && open.spans) || null });
   if (!playing) drainAudio();
 }
@@ -1731,12 +1736,16 @@ function listen() {
     // talking to, so the turn is not coming back either way.
     if (dropped) abandon(open ? "lost her mid-answer, the connection dropped" : "");
     dropped = false;
+    // A service that restarted is not speaking into the room any more, whatever
+    // it was doing when the stream went. Never inherit its silence.
+    aloud = false;
     if (!open && !speakingNow) setState("idle", "with you");
   };
   events.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
-    if (ev.type === "activity") tool(ev.lines || []);
+    if (ev.type === "aloud") aloud = Boolean(ev.value);
+    else if (ev.type === "activity") tool(ev.lines || []);
     else if (ev.type === "delta") delta(ev.text || "");
     else if (ev.type === "result") done(ev.ms, ev.text);
     else if (ev.type === "say") unbidden(ev.text || "");

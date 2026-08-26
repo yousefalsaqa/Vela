@@ -15,6 +15,7 @@ import {
   captureArgs,
   createTranscriber,
   saidSomething,
+  HEARD_ANYTHING,
   cliTranscriber,
   resolveWinGetBinary,
   audioDevices,
@@ -306,6 +307,47 @@ describe("createTranscriber", () => {
   };
 
   const heard = (text: string) => () => `ok ${JSON.stringify({ text })}`;
+
+  /** What the worker really sends back: the text and how sure it was. */
+  const scored = (text: string, silence: number, logprob: number) => () =>
+    `ok ${JSON.stringify({ text, silence, logprob })}`;
+
+  test("a sentence the decoder scored as silence never reaches the caller", async () => {
+    const dropped: string[] = [];
+    const fake = fakeSpawner(({ proc }) =>
+      respondToRequests(proc, scored("Vela, run doggy run doggy.", 0.93, -0.4)),
+    );
+    const ears = createTranscriber({
+      python: "python.exe",
+      worker: "whisper_worker.py",
+      spawn: fake.spawn,
+      onDropped: (h) => dropped.push(h.text),
+    });
+    assert.equal(await ears.hear(Buffer.alloc(320)), "", "nobody said this");
+    assert.deepEqual(
+      dropped,
+      ["Vela, run doggy run doggy."],
+      "a bar nobody can see is a bar he cannot move",
+    );
+    ears.stop();
+  });
+
+  test("the same utterance survives when the caller says a key was held", async () => {
+    const fake = fakeSpawner(({ proc }) =>
+      respondToRequests(proc, scored("open the fantasy project", 0.93, -0.4)),
+    );
+    const ears = createTranscriber({
+      python: "python.exe",
+      worker: "whisper_worker.py",
+      spawn: fake.spawn,
+    });
+    assert.equal(
+      await ears.hear(Buffer.alloc(320), HEARD_ANYTHING),
+      "open the fantasy project",
+      "push-to-talk already knows speech happened, so the bar is the wrong tool",
+    );
+    ears.stop();
+  });
 
   test("starts the worker on the model and device it was given", () => {
     const fake = fakeSpawner();
@@ -697,6 +739,28 @@ describe("saidSomething", () => {
     // microphone, and he is going to have to move it.
     assert.equal(saidSomething(speech, { maxSilence: 0.01 }), false);
     assert.equal(saidSomething({ ...speech, silence: 0.8 }, { maxSilence: 0.9 }), true);
+  });
+});
+
+describe("saidSomething, told to let everything through", () => {
+  test("a held key is not judged by the wake word's bar", () => {
+    // Push-to-talk is a promise that speech happened. The same quiet sentence
+    // the wake word is right to doubt is the one the terminal must not lose.
+    const quiet = { text: "open the fantasy project", silence: 0.94, logprob: -2.8 };
+    assert.equal(saidSomething(quiet), false, "the wake word is right to drop this");
+    assert.equal(
+      saidSomething(quiet, HEARD_ANYTHING),
+      true,
+      "he pressed a key and spoke; losing it costs him the sentence",
+    );
+  });
+
+  test("it still takes nothing for something", () => {
+    assert.equal(
+      saidSomething({ text: "" }, HEARD_ANYTHING),
+      false,
+      "an empty transcript is empty however generous the bar is",
+    );
   });
 });
 

@@ -35,10 +35,15 @@ export const WAKE_WORDS = [
   "veyla",
   "vayla",
   "velar",
-  "villa",
-  "bella",
-  "wella",
 ];
+
+/**
+ * Spellings whisper offers that are also ordinary English words: villa, bella,
+ * wella. They were on the list until one of them fired during a phone call and
+ * every sentence after it became a turn. A name she answers to has to be a word
+ * he would not otherwise say in front of her, so they are gone — put one back
+ * with VELA_WAKE_WORDS if this microphone needs it.
+ */
 
 /**
  * Words allowed in front of the name. "Hey Vela" and "okay Vela" are the same
@@ -57,6 +62,40 @@ const LEAD_INS = new Set([
   "and",
 ]);
 
+/**
+ * Ways he ends a conversation.
+ *
+ * A session that only ever closes on a timer leaves her listening through the
+ * thirty seconds after he has plainly finished, which is the window a mis-fire
+ * needs. Being able to say "thanks, we're done" and have her let go is worth
+ * more than the timer being right.
+ */
+export const DISMISSALS = [
+  "thanks",
+  "thank you",
+  "thanks a lot",
+  "thank you very much",
+  "that's all",
+  "that's it",
+  "that'll be all",
+  "we're done",
+  "we are done",
+  "i'm done",
+  "done",
+  "never mind",
+  "nevermind",
+  "forget it",
+  "cancel",
+  "stop",
+  "goodbye",
+  "bye",
+  "good night",
+  "goodnight",
+  "nothing",
+  "no thanks",
+  "no thank you",
+];
+
 /** Compare on letters only, so "Vela," and "Vela." and "vela" are one word. */
 const bare = (word: string): string =>
   word.toLowerCase().replace(/[^a-z']/g, "").replace(/'s$/, "");
@@ -69,6 +108,8 @@ export interface Wake {
   heard: boolean;
   /** What he wanted, with the name taken off. Empty means he only called her. */
   rest: string;
+  /** The alias whisper actually wrote down. Empty when she was not addressed. */
+  word: string;
 }
 
 /**
@@ -79,7 +120,7 @@ export interface Wake {
  * to someone else, and answering that is worse than missing it.
  */
 export function matchWake(text: string, words: string[] = WAKE_WORDS): Wake {
-  const missed: Wake = { heard: false, rest: "" };
+  const missed: Wake = { heard: false, rest: "", word: "" };
   const aliases = new Set(words.map(bare));
 
   const tokens = [...text.matchAll(/\S+/g)].map((m) => ({
@@ -96,13 +137,36 @@ export function matchWake(text: string, words: string[] = WAKE_WORDS): Wake {
   let lead = 0;
   while (lead < tokens.length && LEAD_INS.has(tokens[lead].word)) lead++;
 
+  const word = tokens[at].word;
   if (at === lead) {
-    return { heard: true, rest: trimLead(text.slice(tokens[at].end)).trim() };
+    return { heard: true, rest: trimLead(text.slice(tokens[at].end)).trim(), word };
   }
   if (at === tokens.length - 1) {
-    return { heard: true, rest: trimTail(text.slice(0, tokens[at].at)).trim() };
+    return { heard: true, rest: trimTail(text.slice(0, tokens[at].at)).trim(), word };
   }
   return missed;
+}
+
+/**
+ * Was that him letting her go?
+ *
+ * Matched on the *end* of the utterance rather than anywhere in it, and only
+ * on a short one. "Okay thank you, we're done" ends in a dismissal and is him
+ * finishing; "tell me when the timer is done" ends in one word of it and is
+ * not. The length cap is what keeps a sentence that merely happens to end in
+ * "stop" from closing the session.
+ */
+export function isDismissal(text: string, phrases: string[] = DISMISSALS): boolean {
+  const words = [...text.matchAll(/\S+/g)].map((m) => bare(m[0])).filter(Boolean);
+  let from = 0;
+  while (from < words.length && LEAD_INS.has(words[from])) from++;
+  const core = words.slice(from);
+  if (!core.length || core.length > 6) return false;
+  const said = core.join(" ");
+  return phrases.some((phrase) => {
+    const want = phrase.split(/\s+/).map(bare).filter(Boolean).join(" ");
+    return want.length > 0 && (said === want || said.endsWith(` ${want}`));
+  });
 }
 
 /** How the room is cut into utterances. Every number here is milliseconds. */
@@ -274,16 +338,38 @@ export interface WakeListener {
   stop: () => void;
 }
 
+/**
+ * What let an utterance through, so a mis-fire can be read off the log rather
+ * than guessed at. The two ways she goes wrong — answering the room, and never
+ * answering him — are the same silence from the outside.
+ */
+export interface WakeTrigger {
+  /** The alias whisper wrote down. Empty on a follow-up. */
+  word: string;
+  /** True when the window let it through rather than her name. */
+  followUp: boolean;
+}
+
 export interface WakeOptions {
   device: string;
   /** Raw samples in, what was said out. The service's warm whisper worker. */
   hear: (pcm: Buffer) => Promise<string>;
   /** He asked her something. */
-  onCommand: (text: string) => void;
+  onCommand: (text: string, woke: WakeTrigger) => void;
   /** He said only her name, and is waiting to be acknowledged. */
-  onName?: () => void;
+  onName?: (word: string) => void;
+  /** He said they were finished, so the session is over. */
+  onDismiss?: () => void;
   /** Every utterance that got as far as a transcript. Diagnostics only. */
   onHeard?: (heard: { text: string; woke: boolean; level: number }) => void;
+  /**
+   * Every utterance the gate cut out of the room, before whisper sees it.
+   *
+   * The two silences look identical from the transcript alone: a gate that
+   * never opens and a gate that opens onto audio whisper reads as nothing.
+   * Diagnostics only.
+   */
+  onCaptured?: (captured: { ms: number; level: number }) => void;
   /** The microphone went away. */
   onProblem?: (why: string) => void;
   words?: string[];
@@ -294,6 +380,12 @@ export interface WakeOptions {
    * word feel like a command line. 0 turns it off.
    */
   followUpMs?: number;
+  /**
+   * Nameless turns one address is worth. See `arm` for why this is bounded.
+   */
+  followUps?: number;
+  /** Phrases that end the session outright. See DISMISSALS. */
+  dismissals?: string[];
   segment?: SegmentOptions;
   ffmpeg?: string;
   spawn?: Spawner;
@@ -312,13 +404,42 @@ export interface WakeOptions {
 export function startWakeListener(opts: WakeOptions): WakeListener {
   const now = opts.now ?? Date.now;
   const followUpMs = opts.followUpMs ?? 8_000;
+  const followUps = opts.followUps ?? 6;
   const reopenMs = opts.reopenMs ?? [1_000, 2_000, 5_000, 15_000, 30_000];
 
   let stopped = false;
   let held = false;
   let followUntil = 0;
+  /** Nameless turns left on the window that is open. */
+  let followLeft = 0;
   /** Set while held, so the window is measured from when she stops talking. */
   let followOwed = false;
+
+  /**
+   * Open a session. Her name does this, and so does answering him inside one.
+   *
+   * A session runs on silence: it lasts until nothing has been said *to her*
+   * for `followUpMs`, or until he says they are finished. That is what makes
+   * her feel spoken to rather than commanded — he says her name once and then
+   * talks. The cost is real: a mis-fire opens a session too, and every nameless
+   * turn inside one pushes the deadline out again, so on a timer alone a single
+   * bad wake in a talking room never closes.
+   *
+   * It was unbounded once, and that is exactly what happened — eleven turns of
+   * transcribed noise off one hallucinated name. So an address is worth a fixed
+   * number of nameless turns as well as a stretch of time, and the number is
+   * small enough that a mis-fire is an annoyance rather than an open mic.
+   *
+   * Be honest about what the cap costs, because it is not free: only saying her
+   * name re-arms the count, so a real conversation he never names her in dies
+   * at the same limit the noise does. Six is chosen for that side of it rather
+   * than this one — long enough to be a conversation, short enough that a room
+   * talking to itself runs out.
+   */
+  const arm = () => {
+    followUntil = now() + followUpMs;
+    followLeft = followUps;
+  };
   let deaths = 0;
   let mic: Mic | null = null;
 
@@ -334,24 +455,39 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
   let pendingLevel = 0;
 
   const consider = (text: string, level: number) => {
-    if (!text) return;
     const woken = matchWake(text, opts.words);
-    const following = followUpMs > 0 && now() < followUntil;
-    opts.onHeard?.({ text, woke: woken.heard || following, level });
+    const following = followUpMs > 0 && followLeft > 0 && now() < followUntil;
+    opts.onHeard?.({ text, woke: (woken.heard || following) && Boolean(text), level });
+    if (!text) return;
 
     if (woken.heard && !woken.rest) {
       // Just her name. She answers, and the window means the next thing he
       // says needs no name at all.
-      followUntil = now() + followUpMs;
-      opts.onName?.();
+      arm();
+      opts.onName?.(woken.word);
       return;
     }
 
     const said = woken.heard ? woken.rest : following ? text : "";
     if (!said) return;
 
-    followUntil = now() + followUpMs;
-    opts.onCommand(said);
+    // Him letting her go ends it now, rather than leaving her listening
+    // through the timer he has just made unnecessary.
+    if (isDismissal(said, opts.dismissals)) {
+      followUntil = 0;
+      followLeft = 0;
+      opts.onDismiss?.();
+      return;
+    }
+
+    if (woken.heard) arm();
+    else {
+      // Measured from the last thing said to her, so a conversation stays
+      // open for as long as it is still a conversation.
+      followLeft--;
+      followUntil = now() + followUpMs;
+    }
+    opts.onCommand(said, { word: woken.word, followUp: !woken.heard });
   };
 
   const drain = async () => {
@@ -375,6 +511,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
 
   const segmenter = createSegmenter((pcm, level) => {
     if (stopped || held) return;
+    opts.onCaptured?.({ ms: Math.round((pcm.length / 2 / SAMPLE_RATE) * 1000), level });
     pending = pcm;
     pendingLevel = level;
     void drain();
@@ -413,7 +550,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
 
     hold() {
       held = true;
-      followOwed = followUntil > 0;
+      followOwed = followUntil > 0 && followLeft > 0;
       segmenter.reset();
       pending = null;
     },

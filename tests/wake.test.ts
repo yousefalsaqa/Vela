@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   matchWake,
+  isDismissal,
   createSegmenter,
   startWakeListener,
   WAKE_WORDS,
@@ -50,11 +51,12 @@ describe("matchWake", () => {
     assert.deepEqual(matchWake("Vela, what time is it"), {
       heard: true,
       rest: "what time is it",
+      word: "vela",
     });
   });
 
   test("her name on its own is a call, not a question", () => {
-    assert.deepEqual(matchWake("Vela?"), { heard: true, rest: "" });
+    assert.deepEqual(matchWake("Vela?"), { heard: true, rest: "", word: "vela" });
   });
 
   test("a filler in front doesn't push the name out of the front position", () => {
@@ -67,6 +69,7 @@ describe("matchWake", () => {
     assert.deepEqual(matchWake("what time is it, Vela"), {
       heard: true,
       rest: "what time is it",
+      word: "vela",
     });
   });
 
@@ -89,10 +92,27 @@ describe("matchWake", () => {
   });
 
   test("what whisper actually writes down counts as her name", () => {
-    // base.en has never heard "Vela" and reaches for a real word instead.
-    for (const misheard of ["Bella, what's the weather", "Villa, what's the weather"]) {
+    // base.en has never heard "Vela" and lands on a different vowel each time.
+    for (const misheard of ["Vella, what's the weather", "Veyla, what's the weather"]) {
       assert.equal(matchWake(misheard).heard, true, `"${misheard}" is a real mishearing`);
     }
+  });
+
+  test("a mishearing that is also an ordinary word is not her name", () => {
+    // These were on the list, and one of them woke her during a phone call.
+    // Whisper really does write them down, so this is a deliberate deafness:
+    // a name he might say to someone else costs more than it is worth.
+    for (const said of ["Bella, what's the weather", "Villa, what's the weather"]) {
+      assert.equal(matchWake(said).heard, false, `"${said}" is a word he might say to a person`);
+    }
+  });
+
+  test("a custom list can put a risky mishearing back", () => {
+    assert.equal(
+      matchWake("Bella, what's the weather", ["vela", "bella"]).heard,
+      true,
+      "the defaults are a starting point, not a ceiling",
+    );
   });
 
   test("the ask keeps its own casing and punctuation, because the model reads it", () => {
@@ -118,6 +138,44 @@ describe("matchWake", () => {
 
   test("the shipped list is lowercase, because that is what it is matched as", () => {
     assert.deepEqual(WAKE_WORDS, WAKE_WORDS.map((w) => w.toLowerCase()));
+  });
+});
+
+describe("isDismissal", () => {
+  test("the ways he actually ends a conversation", () => {
+    for (const said of [
+      "thanks",
+      "okay thank you",
+      "thank you, we're done",
+      "alright that's all",
+      "never mind",
+      "bye",
+      "okay we are done",
+    ]) {
+      assert.equal(isDismissal(said), true, `"${said}" is him letting her go`);
+    }
+  });
+
+  test("a request that merely ends in one of those words is not a goodbye", () => {
+    for (const said of [
+      "tell me when the timer is done",
+      "put the kettle on and stop the music after",
+      "what did he say thank you for",
+    ]) {
+      assert.equal(
+        isDismissal(said),
+        false,
+        `"${said}" is an instruction, and dropping it costs him the turn`,
+      );
+    }
+  });
+
+  test("a long sentence is never a goodbye, however it ends", () => {
+    assert.equal(
+      isDismissal("okay so the thing I actually wanted to ask you about was that we are done"),
+      false,
+      "the length cap is what keeps a real sentence from closing the session",
+    );
   });
 });
 
@@ -269,11 +327,13 @@ describe("startWakeListener", () => {
   function listener(opts: {
     transcripts?: string[];
     followUpMs?: number;
+    followUps?: number;
     now?: () => number;
   } = {}) {
     const fake = fakeSpawner();
     const commands: string[] = [];
     const names: number[] = [];
+    const byes: number[] = [];
     const heard: Buffer[] = [];
     const queue = [...(opts.transcripts ?? [])];
 
@@ -282,6 +342,7 @@ describe("startWakeListener", () => {
       spawn: fake.spawn,
       reopenMs: [0],
       followUpMs: opts.followUpMs,
+      ...(opts.followUps === undefined ? {} : { followUps: opts.followUps }),
       ...(opts.now ? { now: opts.now } : {}),
       segment: { frameMs: 10, preRollMs: 20, minMs: 20, hangoverMs: 30, maxMs: 5_000 },
       hear: async (pcm) => {
@@ -290,6 +351,7 @@ describe("startWakeListener", () => {
       },
       onCommand: (text) => commands.push(text),
       onName: () => names.push(1),
+      onDismiss: () => byes.push(1),
     });
 
     /** Push audio down the microphone's pipe, as ffmpeg would. */
@@ -302,7 +364,7 @@ describe("startWakeListener", () => {
       await play(Buffer.concat([room(200), voice(200), room(200)]));
     };
 
-    return { wake, fake, commands, names, heard, play, utterance };
+    return { wake, fake, commands, names, byes, heard, play, utterance };
   }
 
   test("she opens the microphone in the format whisper reads", async () => {
@@ -374,6 +436,148 @@ describe("startWakeListener", () => {
     await utterance();
     await settle();
     assert.equal(commands.length, 1, "a conversation with someone else must not become turns");
+    wake.stop();
+  });
+
+  test("capped, a sentence she was not addressed in cannot hold the window open", async () => {
+    let clock = 1_000;
+    const { wake, commands, utterance } = listener({
+      transcripts: [
+        "Vela, what's on my calendar",
+        "so I told him it was fine",
+        "and then we went to dinner",
+      ],
+      followUpMs: 5_000,
+      followUps: 1,
+      now: () => clock,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    clock += 4_000;
+    await utterance();
+    await until(() => commands.length === 2, "the sentence the window exists for");
+    clock += 4_000;
+    await utterance();
+    await settle();
+    assert.equal(
+      commands.length,
+      2,
+      "a window a nameless sentence can renew turns one mis-fire into the whole conversation",
+    );
+    wake.stop();
+  });
+
+  test("capped at one, the window is spent by the sentence it was opened for", async () => {
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Vela, what's on my calendar", "and tomorrow", "did you see the game"],
+      followUpMs: 5_000,
+      followUps: 1,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    await utterance();
+    await until(() => commands.length === 2, "the follow-up she was owed");
+    await utterance();
+    await settle();
+    assert.equal(
+      commands.length,
+      2,
+      "an unspent window is a room she keeps answering, however quickly he is talking",
+    );
+    wake.stop();
+  });
+
+  test("uncapped by the caller, a mis-fire still runs out on its own", async () => {
+    // The cap existed and defaulted to Infinity, which is the same as not
+    // having it: one hallucinated wake, and every noise in the room for the
+    // next several minutes arrived as a turn — each one pushing the deadline
+    // out again, so the timer alone never closed it. What makes this the
+    // default rather than a setting is that the failure is silent from the
+    // outside: she looks like she is listening, and nobody in the room knows
+    // she is answering them.
+    let clock = 1_000;
+    const noise = Array.from({ length: 12 }, (_, i) => `bop bop bop ${i}`);
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Vela", ...noise],
+      followUpMs: 30_000,
+      now: () => clock,
+    });
+    await utterance();
+    for (const _ of noise) {
+      clock += 1_000;
+      await utterance();
+      await settle();
+    }
+    // Named, so a change to the number is a change to this line rather than a
+    // test that quietly still passes at eleven.
+    assert.equal(
+      commands.length,
+      6,
+      "one mis-fire must cost a bounded number of turns, not the rest of the conversation",
+    );
+    wake.stop();
+  });
+
+  test("a conversation stays open for as long as it is a conversation", async () => {
+    let clock = 1_000;
+    const { wake, commands, utterance } = listener({
+      transcripts: [
+        "Vela, what's on my calendar",
+        "can you hear me",
+        "what about tomorrow",
+        "and the day after",
+      ],
+      followUpMs: 30_000,
+      now: () => clock,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    // Each reply lands well inside the session, and pushes it along.
+    for (let i = 2; i <= 4; i++) {
+      clock += 20_000;
+      await utterance();
+      await until(() => commands.length === i, `sentence ${i}`);
+    }
+    assert.equal(
+      commands.length,
+      4,
+      "saying her name before every sentence is what makes a wake word tiring",
+    );
+    wake.stop();
+  });
+
+  test("the session ends when nothing has been said to her, not when she is bored", async () => {
+    let clock = 1_000;
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Vela, open Netflix", "so anyway I told him it was fine"],
+      followUpMs: 30_000,
+      now: () => clock,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    clock += 31_000;
+    await utterance();
+    await settle();
+    assert.equal(commands.length, 1, "she has to let go of a room she is no longer part of");
+    wake.stop();
+  });
+
+  test("telling her they're done closes it there and then", async () => {
+    const { wake, commands, byes, utterance } = listener({
+      transcripts: ["Vela, open Netflix", "okay thank you, we're done", "did you see the game"],
+      followUpMs: 30_000,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    await utterance();
+    await until(() => byes.length === 1, "the goodbye");
+    await utterance();
+    await settle();
+    assert.equal(
+      commands.length,
+      1,
+      "a session he has closed must not still be open, or the timer is the only way out",
+    );
     wake.stop();
   });
 

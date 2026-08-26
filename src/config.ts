@@ -372,12 +372,34 @@ export const WAKE_ON = switchedOn(process.env.VELA_WAKE, true);
 export const WAKE_WORDS = parseSkillList(process.env.VELA_WAKE_WORDS) ?? DEFAULT_WAKE_WORDS;
 
 /**
- * How long after a turn she keeps listening without her name.
+ * How long a session survives with nothing said to her.
  *
- * Having to say "Vela" before every sentence turns a conversation into a
- * command line. 0 turns the window off and requires the name every time.
+ * Saying her name opens a conversation, not a single turn: "Vela" — "Yes?" —
+ * "can you hear me" has to work, and it does not if the second sentence needs
+ * the name again. So she stays listening until half a minute passes with
+ * nothing said to her, or until he says they are done, whichever comes first.
+ * Set it to 0 to require the name every time.
  */
-export const WAKE_FOLLOWUP_MS = Number(process.env.VELA_WAKE_FOLLOWUP ?? "8000");
+export const WAKE_FOLLOWUP_MS = Number(process.env.VELA_WAKE_FOLLOWUP ?? "30000");
+
+/**
+ * A hard cap on nameless sentences in one session.
+ *
+ * A session ends on silence, which is what a conversation actually does, and
+ * that is the right rule right up until she wakes on something he never said —
+ * then the room keeps the session alive as long as anyone in it is talking.
+ *
+ * This was Infinity, and it went exactly that way: one hallucinated name, and
+ * every noise in the room for the next several minutes arrived as a turn. Six
+ * is a compromise rather than a fix, because only her name re-arms the count,
+ * so it bounds a real conversation he never names her in by the same amount.
+ * The gate that actually belongs in front of this is confidence — see
+ * VELA_SILENCE — and this is the backstop for when that lets one through.
+ */
+export const WAKE_FOLLOWUPS = Number(process.env.VELA_WAKE_FOLLOWUPS ?? "6");
+
+/** What she says when he tells her they are finished. */
+export const WAKE_BYE = process.env.VELA_WAKE_BYE ?? "Okay.";
 
 /**
  * How much louder than the room a sound has to be before it is speech.

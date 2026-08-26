@@ -28,6 +28,7 @@ import {
   SAMPLE_RATE,
   type Recorder,
   type Transcriber,
+  HEARD_ANYTHING,
 } from "./listen.js";
 import {
   NAME,
@@ -330,7 +331,10 @@ async function main() {
       recorder = null;
       clock.captured = Date.now();
       status.set("transcribing");
-      const heard = await (ears?.hear(pcm) ?? Promise.resolve("")).catch(() => "");
+      // The terminal is push-to-talk and nothing else: he held a key down to
+      // say this. Judging it by the wake word's bar would drop the quiet real
+      // sentence rather than the invented one. See HEARD_ANYTHING.
+      const heard = await (ears?.hear(pcm, HEARD_ANYTHING) ?? Promise.resolve("")).catch(() => "");
       status.stop();
       clock.transcribed = Date.now();
 

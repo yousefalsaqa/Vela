@@ -86,6 +86,15 @@ export interface ServeOptions {
 
 export interface RunningServer {
   endpoint: Endpoint;
+  /**
+   * Say something to every attached client that the core did not say.
+   *
+   * The stream is otherwise a mirror of the core, which is right for what she
+   * says and wrong for facts about the room she says it in. A client that
+   * cannot hear the room has no other way to learn that this reply is already
+   * being spoken aloud in it.
+   */
+  announce: (payload: unknown) => void;
   close: () => Promise<void>;
 }
 
@@ -463,6 +472,10 @@ ${text}` : text);
         screenToken = null;
       }
     }
+    broadcast(payload);
+  });
+
+  const broadcast = (payload: unknown) => {
     const frame = `data: ${JSON.stringify(payload)}\n\n`;
     for (const c of [...clients]) {
       try {
@@ -471,7 +484,7 @@ ${text}` : text);
         clients.delete(c); // a client that hung up mustn't take the rest down
       }
     }
-  });
+  };
 
   return new Promise((fulfil) => {
     // A fixed port is what makes her address permanent, and it is also the one
@@ -495,6 +508,7 @@ ${text}` : text);
 
       fulfil({
         endpoint,
+        announce: broadcast,
         close: () =>
           new Promise<void>((done) => {
             unsubscribe();

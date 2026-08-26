@@ -674,6 +674,29 @@ tone it confidently returns "You." or "Thank you.", and a stray Enter shouldn't
 send a phantom turn. Real speech that happens to start with "thanks" survives —
 there's a test for exactly that.
 
+**`saidSomething()` catches the ones it cannot name.** `cleanTranscript` works
+by exact match, so it only ever catches the hallucinations whisper repeats. The
+wake word made that insufficient: an open microphone hands whisper room tone all
+day, and what comes back is novel, grammatical, and indistinguishable from an
+instruction — "For a second, Kokoro" and "I think it's official about more" are
+both real, both from a quiet room, and no list would have caught either. So the
+worker now reports two numbers next to the text — `no_speech_prob`, whisper's
+own belief that the audio was nothing, and `avg_logprob`, how much it believed
+the words it picked — taken at their *worst* across segments, because a
+hallucination is usually one confident segment beside a doubtful one and a mean
+lets the confident half hide the other. Those describe the audio rather than the
+words, and room tone scores badly whatever sentence it is turned into.
+
+The bar is asymmetric, and deliberately so. **Push-to-talk is a promise that
+speech happened** — he held a key and spoke into it — so the terminal and the
+hub's record button pass `HEARD_ANYTHING` and are not filtered at all; the bar
+there could only lose him a quiet real sentence. The wake word has no such
+promise. It is guessing from loudness alone, which is why it needs the bar and
+why it gets the strict one.
+
+`VELA_WAKE_DEBUG=on` prints every utterance the bar threw away, with both
+numbers, because a threshold nobody can see is a threshold he cannot move.
+
 **CPU is the default on purpose.** The CUDA runtime is installed (cuBLAS 12.9 and
 cuDNN 9.24, as pip wheels inside whisper's own venv rather than the 3GB toolkit),
 and `VELA_WHISPER_DEVICE=cuda` works. It just doesn't help, measured on a
@@ -745,13 +768,35 @@ before the first word. The terminal keeps one player for a whole conversation
 and pays that once, but it has a key press telling it when a turn begins.
 Nothing here says when she has finished being heard except the player closing.
 
-**The name isn't needed twice.** For eight seconds after a turn, the next thing
-he says is taken as a turn without it — otherwise a conversation becomes a
-command line. The window is measured from when she *stops* talking, not when
-she started, so a long answer doesn't eat it.
+**One address is worth one sentence.** Her name, one thing said, done — the
+next sentence needs the name again. There is a follow-up window in here, and
+it is off: for eight seconds after a turn it took the next sentence without
+her name, which is lovely when she is right and is also the only thing between
+one mis-fire and a room she keeps answering. A conversation belongs in the
+hub, which he can ask her to open. The microphone is for the sentence he wants
+said without opening anything.
+
+`VELA_WAKE_FOLLOWUP` turns the window back on, in milliseconds, and
+`VELA_WAKE_FOLLOWUPS` caps how many nameless sentences one address buys while
+it is open. Two things learned the hard way live in that code: the window is
+armed by her *name* alone, never renewed by what it lets through — the first
+version renewed on anything and so was a latch, not a timer, and a single
+mis-fire during a phone call turned every sentence of the call into a model
+turn — and it is measured from when she *stops* talking, so a long answer
+doesn't eat it.
+
+**Every turn says what woke her.** The line she prints carries the alias that
+matched — `you › (vella) what's on my calendar` — or `(follow-up)` when the
+window let it through rather than her name. Answering her name alone prints
+too. Without that, the one event worth seeing when she starts answering the
+room — the mis-fire that opened the window — was the only one that was silent.
 
 **Her name is a list, not a word.** `base.en` has never heard "Vela" and
-reaches for the nearest real word, so `villa`, `bella` and `vella` all count.
+reaches for the nearest real word, so `vella`, `veyla` and `velar` all count.
+Mishearings that are also ordinary English words — `villa`, `bella`, `wella` —
+are deliberately *not* on it: whisper really does produce them, and a name he
+might say to another person costs more than it earns. `VELA_WAKE_WORDS` puts
+one back if this microphone needs it.
 The name has to be at the front of the utterance or at the very end — "Vela,
 what time is it" or "what time is it, Vela". A name in the middle is him
 talking *about* her to someone else, and answering that is worse than missing
@@ -766,11 +811,14 @@ browser's to say, or it would be said twice.
 |---|---|---|
 | `VELA_WAKE` | `on` | `off` releases the microphone entirely |
 | `VELA_WAKE_WORDS` | `vela` and its mishearings | Comma-separated; replaces the list, so it can turn one off |
-| `VELA_WAKE_FOLLOWUP` | `8000` | Milliseconds she keeps listening after a turn; `0` requires the name every time |
+| `VELA_WAKE_FOLLOWUP` | `0` | Milliseconds she keeps listening after a turn. `0` is one address, one sentence |
+| `VELA_WAKE_FOLLOWUPS` | `1` | Nameless sentences one address buys while that window is open. This is what a mis-fire costs |
 | `VELA_WAKE_MARGIN` | `8` | dB over the room before a sound is speech. Lower hears more, including the keyboard |
 | `VELA_WAKE_MAX` | `15000` | Longest single utterance sent to whisper |
 | `VELA_WAKE_ACK` | `Yes?` | What she says to her name alone |
 | `VELA_WAKE_DEBUG` | `off` | Print every transcript with its level and whether it woke her |
+| `VELA_SILENCE` | `0.5` | How sure whisper may be that an utterance was silence before it is thrown away. Higher lets more through |
+| `VELA_LOGPROB` | `-1.0` | How badly whisper may doubt its own words. Lower lets more through |
 
 **When it goes wrong, `VELA_WAKE_DEBUG=on` says which way.** She never answers,
 or she answers the television, and from outside those look identical and have

@@ -416,10 +416,22 @@ export const MIN_LOGPROB = -1.0;
  * audio rather than the words, and room tone scores badly whatever sentence it
  * gets turned into.
  */
-export function saidSomething(
-  heard: Heard,
-  limits: { maxSilence?: number; minLogprob?: number } = {},
-): boolean {
+export interface Limits {
+  maxSilence?: number;
+  minLogprob?: number;
+}
+
+/**
+ * Limits that let everything through.
+ *
+ * Push-to-talk is a promise that speech happened: he pressed a key and spoke
+ * into it. The wake word has no such promise — it is guessing from loudness
+ * alone, which is why it needs the bar at all. Judging a held key by the same
+ * standard would throw away the quiet real sentence it exists to catch.
+ */
+export const HEARD_ANYTHING: Limits = { maxSilence: 1, minLogprob: -Infinity };
+
+export function saidSomething(heard: Heard, limits: Limits = {}): boolean {
   if (!heard.text) return false;
   const maxSilence = limits.maxSilence ?? MAX_SILENCE;
   const minLogprob = limits.minLogprob ?? MIN_LOGPROB;
@@ -431,8 +443,14 @@ export function saidSomething(
 }
 
 export interface Transcriber {
-  /** Raw 16 kHz mono samples in, what was said out. */
-  hear: (pcm: Buffer) => Promise<string>;
+  /**
+   * Raw 16 kHz mono samples in, what was said out.
+   *
+   * `limits` overrides the bar for this utterance alone, because one
+   * transcriber serves both a held key and an open microphone and those two
+   * deserve different answers. See HEARD_ANYTHING.
+   */
+  hear: (pcm: Buffer, limits?: Limits) => Promise<string>;
   /**
    * Start loading the model now, if it isn't already.
    *
@@ -475,6 +493,13 @@ export function createTranscriber(opts: {
   maxSilence?: number;
   /** How badly it may doubt its own words. See saidSomething. */
   minLogprob?: number;
+  /**
+   * An utterance thrown away for scoring as silence.
+   *
+   * A dropped transcript and an empty one are the same "" to the caller, and
+   * the bar cannot be tuned against a decision nobody can see. Diagnostics.
+   */
+  onDropped?: (heard: Heard) => void;
   onProblem?: (why: string) => void;
   spawn?: Spawner;
 }): Transcriber {
@@ -530,7 +555,7 @@ export function createTranscriber(opts: {
   if (!opts.lazy) ensureWorker();
 
   return {
-    async hear(pcm: Buffer) {
+    async hear(pcm: Buffer, limits?: Limits) {
       if (stopped || !pcm.length) return "";
       const live = ensureWorker();
       if (!live.stdin?.writable) return "";
@@ -554,7 +579,11 @@ export function createTranscriber(opts: {
         const text = cleanTranscript(said.text ?? "");
         // Weighed after cleaning, so the confidence numbers are judged against
         // the text that would actually have become a turn.
-        if (!saidSomething({ ...said, text }, opts)) return "";
+        const weighed: Heard = { ...said, text };
+        if (!saidSomething(weighed, limits ?? opts)) {
+          if (text) opts.onDropped?.(weighed);
+          return "";
+        }
         return text;
       } catch {
         complain("whisper sent back something that isn't JSON");
@@ -587,7 +616,7 @@ export function cliTranscriber(opts: ListenOptions = {}): Transcriber {
   const dir = mkdtempSync(join(tmpdir(), "vela-heard-"));
   let n = 0;
   return {
-    async hear(pcm: Buffer) {
+    async hear(pcm: Buffer, _limits?: Limits) {
       if (!pcm.length) return "";
       const wav = join(dir, `${n++}.wav`);
       writeFileSync(wav, wavFromPcm(normalise(pcm)));
