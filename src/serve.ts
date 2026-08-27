@@ -54,6 +54,7 @@ import {
   VOICE_GAP_MS,
   WAKE_ON,
   WAKE_WORDS,
+  WAKE_LEAD_REQUIRED,
   WAKE_ACK,
   WAKE_DEBUG,
   WAKE_MARGIN_DB,
@@ -396,6 +397,7 @@ async function main() {
       detectMs: WAKE_DETECT_MS,
       ffmpeg,
       words: WAKE_WORDS,
+      requireLead: WAKE_LEAD_REQUIRED,
       followUpMs: WAKE_FOLLOWUP_MS,
       followUps: WAKE_FOLLOWUPS,
       segment: {
@@ -441,6 +443,10 @@ async function main() {
       onName: (word) => {
         console.log(`  \x1b[36myou ›\x1b[0m \x1b[90m(${word})\x1b[0m`);
         listener.hold();
+        // Her name on its own is still her being addressed, and it is how he
+        // opens a conversation. Without this she answers "yes" to a laptop
+        // showing nothing, which is the exact thing showHer exists to prevent.
+        showHer();
         if (speakingAloud) voice.say(WAKE_ACK);
         void Promise.resolve(speaker.drain?.())
           .catch(() => {})
@@ -522,7 +528,11 @@ async function main() {
     console.log(
       detector
         ? `  Wake word on (${device}), model ${WAKE_MODEL}.`
-        : `  Wake word on (${device}). Say "${NAME}".`,
+        // What it prints has to be what actually wakes her. A banner naming a
+        // word the matcher will not accept is how an afternoon goes missing.
+        : `  Wake word on (${device}). Say "${
+            WAKE_LEAD_REQUIRED ? `Hey ${NAME}` : NAME
+          }".`,
     );
     stopListening = () => {
       detector?.stop();

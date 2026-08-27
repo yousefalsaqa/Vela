@@ -142,7 +142,101 @@ describe("matchWake", () => {
   });
 });
 
+/**
+ * The name on its own is the whole false-positive surface: base.en writes
+ * "Vela" out of room tone, and every one of those becomes a turn. Requiring a
+ * word in front of it costs him nothing he was not already saying and takes
+ * the hallucinated single word off the table.
+ */
+describe("matchWake requiring a lead-in", () => {
+  test("an addressed name still gets through, with the address off the front", () => {
+    assert.deepEqual(matchWake("Hey Vela, what time is it", WAKE_WORDS, true), {
+      heard: true,
+      rest: "what time is it",
+      word: "vela",
+    });
+  });
+
+  test("every lead-in counts, not just hey", () => {
+    for (const said of ["okay Vela, lights", "hi Vela, lights", "yo Vela, lights"]) {
+      assert.equal(
+        matchWake(said, WAKE_WORDS, true).heard,
+        true,
+        `"${said}" is him addressing her`,
+      );
+    }
+  });
+
+  test("the bare name is no longer an address", () => {
+    assert.equal(
+      matchWake("Vela, what time is it", WAKE_WORDS, true).heard,
+      false,
+      "the name alone is what whisper invents out of silence",
+    );
+  });
+
+  test("the name trailing a sentence is no longer an address either", () => {
+    assert.equal(
+      matchWake("what time is it, Vela", WAKE_WORDS, true).heard,
+      false,
+      "a name appended to a sentence is the other way a mishearing lands",
+    );
+  });
+
+  test("a lead-in with no name is still nothing", () => {
+    assert.equal(matchWake("hey, what time is it", WAKE_WORDS, true).heard, false);
+  });
+
+  test("off by default, so this changes nothing he did not ask for", () => {
+    assert.equal(matchWake("Vela, what time is it").heard, true);
+    assert.equal(matchWake("what time is it, Vela").heard, true);
+  });
+
+  test("afterAddress strips the lead-in along with the name", () => {
+    assert.equal(
+      afterAddress("Hey Vela, open the PR", WAKE_WORDS, true),
+      "open the PR",
+    );
+  });
+});
+
 describe("isDismissal", () => {
+  test("the phrase he actually uses to let her go", () => {
+    for (const said of ["you can go now", "okay you can go now"]) {
+      assert.equal(isDismissal(said), true, `"${said}" is him finishing`);
+    }
+  });
+
+  /**
+   * In a follow-up she is handed the sentence whole, name and all, so the name
+   * has to come off before the phrase is matched or the dismissal never lands.
+   */
+  test("her name on either end is not part of the phrase", () => {
+    for (const said of [
+      "you can go now, Vela",
+      "Vela, you can go now",
+      "thanks Vela",
+      "Vela that's all",
+    ]) {
+      assert.equal(isDismissal(said), true, `"${said}" is still him finishing`);
+    }
+  });
+
+  /**
+   * The phrase is matched on the end of what he said, so a sentence that ends
+   * in it would close the session. "now" is what keeps the bare "you can go"
+   * out of the list: "tell me when you can go" is a question, not a goodbye.
+   */
+  test("a sentence that merely contains the words is not a dismissal", () => {
+    for (const said of [
+      "can you go to the kitchen and check",
+      "tell me when you can go",
+      "you can go through the list",
+    ]) {
+      assert.equal(isDismissal(said), false, `"${said}" is not him finishing`);
+    }
+  });
+
   test("the ways he actually ends a conversation", () => {
     for (const said of [
       "thanks",

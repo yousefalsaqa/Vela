@@ -45,6 +45,15 @@ REM than ordinary speech does. Small on purpose: this is the only thing
 REM standing between an open microphone and whisper inventing her name.
 set VELA_SILENCE=0.55
 set VELA_LOGPROB=-1.15
+REM No wake model. hey_jarvis is the wrong word, and her own, at a threshold
+REM clean enough to trust, answered 2 of 5 clean recordings of the phrase. A
+REM model loaded at all switches the transcript path off, and the transcript
+REM path is the one that works.
+set VELA_WAKE_DETECT=0
+REM So the address is "Hey Vela" rather than "Vela". The bare name is what
+REM base.en writes out of room tone, and each of those is a turn he did not ask
+REM for; a word in front of it is the whole difference.
+set VELA_WAKE_LEAD=1
 call npm run serve >> "%~dp0..\data\service.log" 2>&1
 "@ | Set-Content -Path $runner -Encoding ascii
 

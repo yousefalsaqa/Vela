@@ -463,6 +463,17 @@ export const WAKE_DETECT_MS = Number(process.env.VELA_WAKE_DETECT_MS ?? "6000");
 export const WAKE_WORDS = parseSkillList(process.env.VELA_WAKE_WORDS) ?? DEFAULT_WAKE_WORDS;
 
 /**
+ * Whether her name has to arrive with a word in front of it: "Hey Vela", not
+ * "Vela".
+ *
+ * The bare name is the whole false-positive surface on the transcript path.
+ * base.en has never heard it, so it writes it out of room tone, and every one
+ * of those is a turn he did not ask for. A lead-in costs him one syllable he
+ * was mostly saying anyway and takes the invented single word off the table.
+ */
+export const WAKE_LEAD_REQUIRED = switchedOn(process.env.VELA_WAKE_LEAD, false);
+
+/**
  * How long a session survives with nothing said to her.
  *
  * Saying her name opens a conversation, not a single turn: "Vela" — "Yes?" —

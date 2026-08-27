@@ -88,6 +88,7 @@ export const DISMISSALS = [
   "forget it",
   "cancel",
   "stop",
+  "you can go now",
   "goodbye",
   "bye",
   "good night",
@@ -120,7 +121,11 @@ export interface Wake {
  * or "what time is it, Vela". A name in the middle is him talking *about* her
  * to someone else, and answering that is worse than missing it.
  */
-export function matchWake(text: string, words: string[] = WAKE_WORDS): Wake {
+export function matchWake(
+  text: string,
+  words: string[] = WAKE_WORDS,
+  requireLead = false,
+): Wake {
   const missed: Wake = { heard: false, rest: "", word: "" };
   const aliases = new Set(words.map(bare));
 
@@ -140,9 +145,14 @@ export function matchWake(text: string, words: string[] = WAKE_WORDS): Wake {
 
   const word = tokens[at].word;
   if (at === lead) {
+    // With a lead-in required, the name arriving with nothing in front of it is
+    // the shape whisper produces out of room tone, so it is not an address.
+    if (requireLead && lead === 0) return missed;
     return { heard: true, rest: trimLead(text.slice(tokens[at].end)).trim(), word };
   }
-  if (at === tokens.length - 1) {
+  // "what time is it, Vela" is the other shape a mishearing lands in, and it
+  // cannot carry a lead-in, so requiring one rules it out too.
+  if (!requireLead && at === tokens.length - 1) {
     return { heard: true, rest: trimTail(text.slice(0, tokens[at].at)).trim(), word };
   }
   return missed;
@@ -157,11 +167,25 @@ export function matchWake(text: string, words: string[] = WAKE_WORDS): Wake {
  * not. The length cap is what keeps a sentence that merely happens to end in
  * "stop" from closing the session.
  */
-export function isDismissal(text: string, phrases: string[] = DISMISSALS): boolean {
+export function isDismissal(
+  text: string,
+  phrases: string[] = DISMISSALS,
+  names: string[] = WAKE_WORDS,
+): boolean {
   const words = [...text.matchAll(/\S+/g)].map((m) => bare(m[0])).filter(Boolean);
   let from = 0;
   while (from < words.length && LEAD_INS.has(words[from])) from++;
-  const core = words.slice(from);
+  let core = words.slice(from);
+  /**
+   * Her name is not part of the phrase, at either end.
+   *
+   * "You can go now, Vela" is the same dismissal as "you can go now", and in a
+   * follow-up she is handed the whole sentence with the name still on it —
+   * matched on the end, that name is what stops the phrase from matching.
+   */
+  const aliases = new Set(names.map(bare));
+  while (core.length && aliases.has(core[0])) core = core.slice(1);
+  while (core.length && aliases.has(core[core.length - 1])) core = core.slice(0, -1);
   if (!core.length || core.length > 6) return false;
   const said = core.join(" ");
   return phrases.some((phrase) => {
@@ -387,6 +411,14 @@ export interface WakeOptions {
   onProblem?: (why: string) => void;
   words?: string[];
   /**
+   * Whether the name has to arrive with a word in front of it.
+   *
+   * "Hey Vela" rather than "Vela". The name on its own is what base.en writes
+   * when it is guessing at silence, and each of those costs him a turn he did
+   * not ask for.
+   */
+  requireLead?: boolean;
+  /**
    * How long after a turn she keeps answering without her name.
    *
    * Saying "Vela" before every sentence of a conversation is what makes a wake
@@ -430,8 +462,8 @@ export interface WakeOptions {
  * this sentence is it. "Hey <something>," is that shape, and taking it is
  * better than handing the model's own trigger back to her as the question.
  */
-export function afterAddress(text: string, words: string[]): string {
-  const woken = matchWake(text, words);
+export function afterAddress(text: string, words: string[], requireLead = false): string {
+  const woken = matchWake(text, words, requireLead);
   if (woken.heard) return woken.rest;
   const lead = /^\s*(hey|hi|ok|okay)[\s,]+[a-z']+[\s,.!?-]+/i.exec(text);
   return (lead ? text.slice(lead[0].length) : text).trim();
@@ -493,7 +525,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
   let pendingLevel = 0;
 
   const consider = (text: string, level: number) => {
-    const woken = matchWake(text, opts.words);
+    const woken = matchWake(text, opts.words, opts.requireLead);
     /**
      * Was this said to her?
      *
@@ -505,7 +537,9 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
     const addressed = detector ? detector.firedSince(detectMs) : woken.heard;
     // What is left once the address is off the front. The model heard "hey
     // jarvis"; whisper may have written something else down for it.
-    const rest = detector ? afterAddress(text, opts.words ?? []) : woken.rest;
+    const rest = detector
+      ? afterAddress(text, opts.words ?? [], opts.requireLead)
+      : woken.rest;
     const following = followUpMs > 0 && followLeft > 0 && now() < followUntil;
     opts.onHeard?.({ text, woke: (addressed || following) && Boolean(text), level });
     if (!text) return;
@@ -523,7 +557,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
 
     // Him letting her go ends it now, rather than leaving her listening
     // through the timer he has just made unnecessary.
-    if (isDismissal(said, opts.dismissals)) {
+    if (isDismissal(said, opts.dismissals, opts.words)) {
       followUntil = 0;
       followLeft = 0;
       opts.onDismiss?.();
