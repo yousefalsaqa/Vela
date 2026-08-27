@@ -155,7 +155,10 @@ body[data-state="lost"] .state { color: var(--wrong); }
 }
 /* The conversation is the base layer, not a window to be managed. It keeps
    the left of the desk and the panels float over the rest of it. */
-.thread { max-width: 52ch; }
+/* Wide enough for the sentence and the detail beside it. A turn with no
+   detail is held to 52ch by .turn:not(.told) .her, so nothing that used to be
+   one column got wider. */
+.thread { max-width: 88ch; }
 body[data-stage="on"] .thread { max-width: 40ch; }
 
 /* ── what was said ────────────────────────────────────────────────────────
@@ -180,7 +183,37 @@ body[data-stage="on"] .thread { max-width: 40ch; }
    alignment by justify-content makes the overflow unreachable instead. */
 .fill { flex: 1 1 0; min-height: 0; }
 
-.turn { flex: 0 0 auto; }
+.turn { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: .7rem 2.6rem; }
+/* What she said, and what she wrote.
+
+   They stopped being the same text when the voice got its own line, and
+   stacking them put the detail directly under the sentence as though it were
+   a continuation of it. Side by side says what they actually are: one thing
+   spoken into the room, and the material behind it. Only turns that have both
+   get two columns — a reply with nothing underneath keeps the full width it
+   has always had. */
+.turn.told { grid-template-columns: minmax(0, 32ch) minmax(0, 1fr); align-items: start; }
+/* His line, the work, and the timing belong to the whole turn, not a column. */
+.turn.told > *:not(.her):not(.wrote) { grid-column: 1 / -1; }
+.turn:not(.told) .her { max-width: 52ch; }
+
+/* The reading half. Quieter and set in the mono face, because the eye should
+   be able to tell at a glance which of the two she actually said. */
+.wrote {
+  margin: 0;
+  font: 400 .82rem/1.66 var(--mono);
+  color: var(--dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.wrote:empty { display: none; }
+/* Once a turn is past, the sentence is the record of it. */
+.turn.past .wrote { display: none; }
+
+/* No room for two columns, so the detail goes back under the sentence. */
+@media (max-width: 900px) {
+  .turn.told { grid-template-columns: minmax(0, 1fr); }
+}
 /* Exactly one exchange is ever at full weight. */
 .turn.past { opacity: .34; }
 .turn.past .her { font-size: .95rem; line-height: 1.5; }
@@ -970,12 +1003,17 @@ function hers() {
   caret.className = "caret";
   said.append(caret);
   el.append(said);
+  // The reading half, empty until there is one. `.wrote:empty` keeps it out of
+  // the way, and `told` is what turns the turn into two columns.
+  const wrote = document.createElement("p");
+  wrote.className = "wrote";
+  el.append(wrote);
   enter(said, 6);
   animate(caret, { opacity: [1, .15], duration: 620, loop: true, alternate: true, ease: "inOutSine" });
 
   // `raw` is what she actually sent; `words` is that with the markdown taken
   // out, which is what is drawn and what the reading head measures against.
-  open = { el, said, caret, startedAt: Date.now(), firstDelta: 0, raw: "", words: "", spoken: 0, emitted: 0, spans: [], steps: [] };
+  open = { el, said, wrote, caret, startedAt: Date.now(), firstDelta: 0, raw: "", words: "", detail: "", tagged: false, spoken: 0, emitted: 0, spans: [], steps: [] };
   // Last turn's unspoken ranges belong to text that is no longer the live one.
   roomHead();
   roomSaid.length = 0;
@@ -1197,6 +1235,58 @@ function settledUpto(raw) {
 }
 
 /** For the eye: the markers go, everything they were wrapped around stays. */
+const SAY_OPEN = "<say>", SAY_CLOSE = "</say>";
+
+/**
+ * The half she said, and the half she wrote.
+ *
+ * Both are run on the whole reply so far, every chunk, so both have to grow
+ * monotonically — renderWords only ever appends, and an offset that moves is
+ * the reading head losing its place. An unterminated tag at the end is left
+ * out for the same reason it is in forReading: it is markup that has only
+ * half arrived.
+ */
+function spokenPart(text) {
+  let out = "", at = 0;
+  for (;;) {
+    const open = text.indexOf(SAY_OPEN, at);
+    if (open === -1) break;
+    const from = open + SAY_OPEN.length;
+    const close = text.indexOf(SAY_CLOSE, from);
+    if (close === -1) { out += text.slice(from).replace(/<[^>]*$/, ""); break; }
+    out += text.slice(from, close) + " ";
+    at = close + SAY_CLOSE.length;
+  }
+  return out;
+}
+
+function writtenPart(text) {
+  let out = "", at = 0;
+  for (;;) {
+    const open = text.indexOf(SAY_OPEN, at);
+    if (open === -1) { out += text.slice(at); break; }
+    out += text.slice(at, open);
+    const close = text.indexOf(SAY_CLOSE, open);
+    // Still inside the tag, so nothing after it exists to be written yet.
+    if (close === -1) break;
+    at = close + SAY_CLOSE.length;
+  }
+  return out.replace(/<[^>]{0,5}$/, "");
+}
+
+/**
+ * Which of the two a reply is.
+ *
+ * A reply with no tag in it at all is the whole thing said, which is what one
+ * looked like before the split and what the voice falls back to. Deciding on
+ * "<say" rather than a closed tag matters: she opens with it, so the answer is
+ * settled on the first chunk and does not flip once words are on screen.
+ */
+function halves(text) {
+  if (!text.includes("<say")) return { spoken: text, written: "" };
+  return { spoken: spokenPart(text), written: writtenPart(text) };
+}
+
 function forReading(text) {
   // Her spoken line is marked in the text she writes; the marks are for the
   // room, not for him.
@@ -1261,14 +1351,43 @@ function renderWords(t, final) {
   t.emitted = Math.max(t.emitted, upto);
 }
 
+/**
+ * Put both halves on screen.
+ *
+ * `tagged` can only change once, on the chunk where her first tag lands, and
+ * when it does everything already drawn belongs to the other half — the spans
+ * would keep offsets measured against a string that no longer exists. Drawing
+ * it again from nothing is cheap at this size and is the only thing that
+ * cannot leave the reading head pointing at the wrong word.
+ */
+function redraw(t, half, tagged, final) {
+  if (tagged !== t.tagged) {
+    t.tagged = tagged;
+    t.said.textContent = "";
+    t.said.append(t.caret);
+    t.spans = [];
+    t.emitted = 0;
+    t.spoken = 0;
+    roomHead();
+    roomSaid.length = 0;
+  }
+  t.words = forReading(half.spoken);
+  renderWords(t, final);
+  const detail = forReading(half.written).trim();
+  if (detail === t.detail) return;
+  t.detail = detail;
+  t.wrote.textContent = detail;
+  t.el.classList.toggle("told", Boolean(detail));
+}
+
 function delta(chunk) {
   const t = hers();
   if (!t.firstDelta) t.firstDelta = Date.now();
   t.raw += chunk;
   // Only the part with no half-written marker in it. The rest is one chunk
   // away and drawing it now would show a `**` that is about to disappear.
-  t.words = forReading(t.raw.slice(0, settledUpto(t.raw)));
-  renderWords(t);
+  const settled = t.raw.slice(0, settledUpto(t.raw));
+  redraw(t, halves(settled), settled.includes("<say"));
   speakReady(t);
   follow();
 }
@@ -1278,8 +1397,7 @@ function done(ms, fallback) {
   if (!t) return;
   if (fallback && !t.raw) t.raw = fallback;
   // Nothing more is coming, so the marker that never closed was literal.
-  t.words = forReading(t.raw);
-  renderWords(t, true);
+  redraw(t, halves(t.raw), t.raw.includes("<say"), true);
   t.caret.remove();
   speakRest(t);
   doing("");
