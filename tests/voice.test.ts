@@ -10,6 +10,7 @@ import {
   createVoice,
   spokenOf,
   withoutSay,
+  stripSay,
   pcmFromWav,
   pcmPlayer,
   kokoroSpeaker,
@@ -244,6 +245,43 @@ describe("spokenOf", () => {
 describe("withoutSay", () => {
   test("the marks are for the room, so a screen never shows them", () => {
     assert.equal(withoutSay("<say>Done.</say> The long version."), "Done. The long version.");
+  });
+});
+
+describe("stripSay", () => {
+  test("holds back a tag that has only half arrived, rather than printing it", () => {
+    // "</sa" on his screen for one chunk, then gone. The terminal writes
+    // straight to stdout, so anything printed cannot be taken back.
+    assert.deepEqual(stripSay("Done.</sa"), { text: "Done.", held: "</sa" });
+  });
+
+  test("the next chunk finishes it, and none of it was ever shown", () => {
+    const first = stripSay("Done.</sa");
+    const second = stripSay("y> The detail.", first.held);
+    assert.equal(first.text + second.text, "Done. The detail.");
+    assert.equal(second.held, "");
+  });
+
+  test("a real angle bracket prints, one chunk late", () => {
+    // The cost of the hold. It has to come out eventually, which is why the
+    // turn ends by writing whatever is still held.
+    const first = stripSay("a <");
+    const second = stripSay(" b", first.held);
+    assert.equal(first.text + second.text, "a < b");
+  });
+
+  test("a reply arriving one character at a time prints exactly what it would whole", () => {
+    const whole = "<say>Done.</say> The detail, at length.";
+    let held = "";
+    let out = "";
+    for (const ch of whole) {
+      const step = stripSay(ch, held);
+      out += step.text;
+      held = step.held;
+    }
+    // What the turn ending does with the remainder.
+    out += held;
+    assert.equal(out, withoutSay(whole), "the slowest possible stream must read the same as the fastest");
   });
 });
 

@@ -9,6 +9,8 @@ import { connectIfRunning } from "./client.js";
 import { createStatus, interjection, isExit } from "./repl.js";
 import {
   createVoice,
+  stripSay,
+  withoutSay,
   windowsSpeaker,
   neuralSpeaker,
   kokoroSpeaker,
@@ -184,6 +186,12 @@ async function main() {
     atLineStart = false;
   };
 
+  /**
+   * A tag that has only half arrived, waiting for the chunk that finishes it.
+   * Printed as-is at the end of the turn if it turns out not to be a tag.
+   */
+  let heldTag = "";
+
   core.subscribe((event) => {
     switch (event.type) {
       case "activity":
@@ -196,18 +204,28 @@ async function main() {
         status.set(event.lines[event.lines.length - 1]);
         break;
 
-      case "delta":
+      case "delta": {
         if (!clock.firstToken) clock.firstToken = Date.now();
-        if (atLineStart && event.text.trim()) prefix();
-        stdout.write(event.text);
+        // The marks are for the voice. He is reading this.
+        const shown = stripSay(event.text, heldTag);
+        heldTag = shown.held;
+        if (atLineStart && shown.text.trim()) prefix();
+        stdout.write(shown.text);
+        // Unstripped on purpose: createVoice is the thing the tags are for.
         voice?.push(event.text);
         break;
+      }
 
       case "result": {
         status.stop();
+        // Whatever is still held was never a tag after all.
+        if (heldTag) {
+          stdout.write(heldTag);
+          heldTag = "";
+        }
         if (event.text) {
           if (atLineStart) prefix();
-          stdout.write(event.text);
+          stdout.write(withoutSay(event.text));
           voice?.push(event.text);
         }
         voice?.flush(); // say the trailing fragment, if any

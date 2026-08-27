@@ -868,6 +868,30 @@ export function withoutSay(text: string): string {
   return text.split(SAY_OPEN).join("").split(SAY_CLOSE).join("");
 }
 
+/**
+ * Take the tags out of a reply that is arriving in pieces.
+ *
+ * withoutSay is enough for text you already hold whole. A stream is not: a
+ * chunk can end halfway through "</say>", and printing that half puts "</sa"
+ * on his screen a moment before the rest of it arrives to explain it. So
+ * anything at the tail that could still turn into a tag is held back until the
+ * next chunk decides what it was.
+ *
+ * The cost is that a real "<" waits one chunk before it prints, which is why
+ * whatever is still held has to be flushed at the end of the turn.
+ */
+export function stripSay(chunk: string, held = ""): { text: string; held: string } {
+  const all = withoutSay(held + chunk);
+  const most = Math.min(SAY_CLOSE.length - 1, all.length);
+  for (let n = most; n > 0; n--) {
+    const tail = all.slice(all.length - n);
+    if (SAY_OPEN.startsWith(tail) || SAY_CLOSE.startsWith(tail)) {
+      return { text: all.slice(0, all.length - n), held: tail };
+    }
+  }
+  return { text: all, held: "" };
+}
+
 export function createVoice(
   speak: Speaker,
   pronounce: [RegExp, string][] = PRONOUNCE_RESPELL,
