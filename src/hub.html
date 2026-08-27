@@ -1203,6 +1203,12 @@ function forReading(text) {
   return text
     .split("<say>").join("")
     .split("</say>").join("")
+    // A tag arrives in pieces: the stream has been seen to hand over "<say"
+    // and ">Two things." as two chunks. Left in, that "<say" renders as a word
+    // for one chunk and then vanishes, and every span offset after it shifts —
+    // which is the reading head losing its place. Bounded to five so a real
+    // angle bracket in her prose comes back on the next chunk.
+    .replace(/<[^>]{0,5}$/, "")
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/`([^`]+)`/g, "$1")

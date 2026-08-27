@@ -39,6 +39,12 @@ REM Unprimed base.en cannot produce the name: it decodes "Hello" or drops it
 REM entirely, so the wake word never sees it. A prior of the name alone is the
 REM narrowest fix; the gate in listen.ts still judges what comes back.
 set VELA_WAKE_VOCABULARY=Vela
+REM A notch looser than the defaults (0.5 / -1.0). Her name is one short word
+REM with no sentence around it to lend it context, so a real one scores worse
+REM than ordinary speech does. Small on purpose: this is the only thing
+REM standing between an open microphone and whisper inventing her name.
+set VELA_SILENCE=0.55
+set VELA_LOGPROB=-1.15
 call npm run serve >> "%~dp0..\data\service.log" 2>&1
 "@ | Set-Content -Path $runner -Encoding ascii
 

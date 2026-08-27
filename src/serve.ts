@@ -234,7 +234,13 @@ async function main() {
       onProblem: (why) => console.log(`  Voice: ${why}`),
       // A turn that renders nothing reports nothing, which is what silence
       // looked like from the outside. This says a sentence reached the player.
-      onSpoke: () => console.log(`  \x1b[90m(speaking)\x1b[0m`),
+      onSpoke: (text, ms) => {
+        console.log(`  \x1b[90m(speaking)\x1b[0m`);
+        // A hub cannot hear the room, so the reading head it draws over her
+        // words has no clock to follow. This is that clock: the sentence that
+        // just started, and how long its samples last. See sweep() in hub.html.
+        server.announce({ type: "saying", text, ms });
+      },
     });
     // Kokoro takes inline phonemes rather than a respelling; see voice.ts.
     const voice = createVoice(speaker.speak, PRONOUNCE_PHONEMES);
