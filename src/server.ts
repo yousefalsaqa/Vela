@@ -17,12 +17,35 @@ import { current, clear, worthRestoring, contentTypeFor, type Screen } from "./s
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ENDPOINT_FILE = resolve(here, "../data/server.json");
+/** The page itself. Exported so a test can hold it to the URL that opens it. */
+export const HUB_FILE = resolve(here, "hub.html");
 
 export interface Endpoint {
   port: number;
   token: string;
   pid: number;
 }
+
+/**
+ * The address of her second face. The same address every time.
+ *
+ * Here rather than beside the caller because it is half of a contract the
+ * compiler cannot see: this writes the query, and the first lines of hub.html
+ * read it back by name. Nothing links the two — the page is served as text and
+ * never imports anything — so a parameter renamed on one side goes on working,
+ * silently, doing nothing. See the contract test in tests/server.test.ts.
+ *
+ * `k` is the token; EventSource cannot carry a header, so it travels in the
+ * address bar and the page takes it out again on arrival.
+ *
+ * It briefly also carried a per-window id, so a dismissal could close the one
+ * window she opened and leave his alone. That bought a distinction he did not
+ * want at the cost of the thing he did: a link that is character-for-character
+ * the same every time, which is what makes it pinnable. Goodbye now closes the
+ * hub, whoever opened it.
+ */
+export const hubUrl = (e: Endpoint): string =>
+  `http://127.0.0.1:${e.port}/?k=${encodeURIComponent(e.token)}`;
 
 /** What the server needs from the core — kept narrow so tests can fake it. */
 export interface ServableCore {
@@ -82,6 +105,53 @@ export interface ServeOptions {
    * address changed every restart. Kept, the address is permanent.
    */
   keepToken?: boolean;
+  /**
+   * Is she being spoken aloud in the room right now?
+   *
+   * `announce` only reaches clients that are already attached, which is fine
+   * for a state change and wrong for a state. A hub opened part-way through a
+   * spoken turn — which is what the wake word does when it opens one — never
+   * saw the announcement, so it would start up believing the room is silent
+   * and say the rest of the reply over her. Asked here, it starts up knowing.
+   */
+  aloud?: () => boolean;
+  /**
+   * The microphone and the speakers in the room she is actually in.
+   *
+   * The hub used to be a second pair of these: its own browser microphone, its
+   * own browser voice, coordinated with the room's by announcement. Two of
+   * everything is what made two of her, and the coordination was the bug
+   * rather than the fix. When the service is in a room, the hub stops being a
+   * second Vela and becomes the controls for the one that exists.
+   *
+   * Asked rather than held, because the room is built after the server it
+   * reports to: the wake word needs somewhere to announce before it can
+   * listen. Returning null means there is no room — no wake word, no speakers
+   * — and the hub falls back to its own microphone and its own voice, which is
+   * the whole interface on a service that has neither.
+   */
+  room?: () => RoomControls | null;
+}
+
+/** The one microphone and the one voice, as the hub is allowed to drive them. */
+export interface RoomControls {
+  /** False while he is muted: she cannot hear the room at all. */
+  hearing: () => boolean;
+  /** Mute or unmute him. */
+  setHearing: (on: boolean) => void;
+  /** False while she is muted: she still answers, just not out loud. */
+  speaking: () => boolean;
+  /** Mute or unmute her. */
+  setSpeaking: (on: boolean) => void;
+  /**
+   * Stop the sentence sounding right now, and the rest of this reply with it.
+   *
+   * Not a toggle, and not the same as muting her: mute is a standing setting
+   * about every reply after it, this is about the one he has heard enough of.
+   * He keeps his voice, she keeps hers, and the next thing either says works
+   * normally.
+   */
+  cut: () => void;
 }
 
 export interface RunningServer {
@@ -95,6 +165,14 @@ export interface RunningServer {
    * being spoken aloud in it.
    */
   announce: (payload: unknown) => void;
+  /**
+   * How many clients are attached: hub tabs, and any REPL that has attached.
+   *
+   * The wake word opens a hub when she is addressed, and opening a second one
+   * for every turn is worse than never opening any. This is how it knows one
+   * is already there.
+   */
+  attached: () => number;
   close: () => Promise<void>;
 }
 
@@ -322,6 +400,16 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
           // service without them shows a smaller face rather than a broken one.
           canHear: Boolean(opts.hear),
           canSpeak: Boolean(opts.render),
+          // Not a capability but a fact about the room, and the one thing a
+          // late-arriving hub cannot work out for itself. See ServeOptions.
+          aloud: Boolean(opts.aloud?.()),
+          // Present means the hub draws controls for the room's microphone and
+          // voice instead of offering a second set of its own. Absent means
+          // there is no room, and the hub is the only Vela there is.
+          room: (() => {
+            const room = opts.room?.();
+            return room ? { hearing: room.hearing(), speaking: room.speaking() } : null;
+          })(),
         }),
       );
       return;
@@ -346,6 +434,44 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
         opts.warm?.(what);
         res.writeHead(202, { "content-type": "application/json" });
         res.end(JSON.stringify({ warming: what }));
+      });
+      return;
+    }
+
+    /**
+     * Mute or unmute the room: him, her, or both.
+     *
+     * The two toggles the hub draws are the same two the room already has, so
+     * this is the wire between them rather than a second set. Absent room, a
+     * 404 rather than a silent success: a control that reports working and
+     * does nothing is the failure this whole change is undoing.
+     */
+    if (req.method === "POST" && path === "/room") {
+      const room = opts.room?.();
+      if (!room) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "she is not in a room" }));
+        return;
+      }
+      collect(req, (body) => {
+        let wanted: { hearing?: unknown; speaking?: unknown; stop?: unknown } = {};
+        try {
+          wanted = JSON.parse(body.toString("utf8") || "{}") as typeof wanted;
+        } catch {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "body must be JSON" }));
+          return;
+        }
+        // Before the toggles, because a body carrying both is someone who
+        // wants the room quiet now and muted after, and doing it the other way
+        // round leaves the current sentence running through the change.
+        if (wanted.stop === true) room.cut();
+        // Absent leaves a toggle alone. Only a real boolean moves it, so a
+        // typo cannot mute a microphone by accident.
+        if (typeof wanted.hearing === "boolean") room.setHearing(wanted.hearing);
+        if (typeof wanted.speaking === "boolean") room.setSpeaking(wanted.speaking);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ hearing: room.hearing(), speaking: room.speaking() }));
       });
       return;
     }
@@ -509,6 +635,7 @@ ${text}` : text);
       fulfil({
         endpoint,
         announce: broadcast,
+        attached: () => clients.size,
         close: () =>
           new Promise<void>((done) => {
             unsubscribe();

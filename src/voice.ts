@@ -213,6 +213,14 @@ export type Speaker = (text: string) => void;
 export interface SpeakerHandle {
   speak: Speaker;
   stop: () => void;
+  /**
+   * Go quiet now, and be able to speak again after.
+   *
+   * stop() is for shutdown and is final. This is for being interrupted, which
+   * is an ordinary thing to happen to someone mid-sentence and must not cost
+   * her the voice for the rest of the session.
+   */
+  cut?: () => void;
   /** Resolve once everything queued has actually been said. */
   drain?: (timeoutMs?: number) => Promise<void>;
 }
@@ -390,11 +398,22 @@ export function pcmFromWav(buffer: Buffer): Buffer | null {
   return null;
 }
 
+/**
+ * Kokoro's own sample rate, and the one the player is opened at.
+ *
+ * Named because two things now depend on it agreeing: the pipe handed to
+ * ffplay, and the arithmetic that turns a sentence's samples into how many
+ * milliseconds it lasts.
+ */
+export const RATE = 24_000;
+
 export interface PcmPlayer {
   /** Queue raw signed 16-bit mono samples. Returns as soon as they're handed over. */
   write: (pcm: Buffer, gapMs?: number) => void;
   /** Close the stream and wait for the tail to finish playing. */
   drain: (timeoutMs?: number) => Promise<void>;
+  /** Kill what is sounding now; the next write starts a fresh player. */
+  cut: () => void;
   stop: () => void;
 }
 
@@ -521,6 +540,22 @@ export function pcmPlayer(opts: {
         closed,
         new Promise((r) => setTimeout(r, timeoutMs).unref?.()),
       ]);
+    },
+
+    /**
+     * End what is sounding now, and leave the player able to start again.
+     *
+     * The difference from stop() is `stopped`, which is one-way: after it
+     * nothing plays for the rest of the process, which is right for shutdown
+     * and wrong for being talked over. Killing the child is what makes the
+     * room go quiet at once rather than at the end of the buffered sentence —
+     * closing the pipe would let ffplay finish what it already holds, which
+     * from the other side of the desk is not being interrupted at all.
+     */
+    cut() {
+      const p = proc;
+      proc = null;
+      p?.kill();
     },
 
     stop() {
@@ -677,12 +712,19 @@ export function synthSpeaker(opts: {
   /** Silence inserted between her sentences. See pcmPlayer. */
   gapMs?: number;
   onProblem?: (why: string) => void;
-  /** Fires when a sentence's samples reach the player, i.e. when she starts. */
-  onSpoke?: () => void;
+  /**
+   * Fires when a sentence's samples reach the player, i.e. when she starts.
+   *
+   * Carries what is being said and how long it lasts, because the only other
+   * place that knows is the wav, and it is consumed here.
+   */
+  onSpoke?: (text: string, ms: number) => void;
   spawn?: Spawner;
 }): SpeakerHandle {
   let queue: Promise<void> = Promise.resolve();
   let stopped = false;
+  /** Bumped by cut(). A render that comes back against an old one is dropped. */
+  let epoch = 0;
 
   let complained = false;
   const complain = (why: string) => {
@@ -694,7 +736,7 @@ export function synthSpeaker(opts: {
   const player = pcmPlayer({
     play: opts.play,
     // Kokoro's own rate, which is what the renderer hands back.
-    sampleRate: 24_000,
+    sampleRate: RATE,
     gapMs: opts.gapMs,
     onProblem: complain,
     spawn: opts.spawn,
@@ -702,15 +744,23 @@ export function synthSpeaker(opts: {
 
   const utter = async (text: string) => {
     if (stopped) return;
+    // Which turn this sentence belongs to. Rendering takes about half a
+    // second, so a cut almost always lands while something is still inside
+    // Kokoro; without this the sentence he interrupted arrives afterwards and
+    // plays into a room he has just silenced.
+    const mine = epoch;
     const wav = await opts.render(text);
-    if (stopped || !wav) return;
+    if (stopped || !wav || mine !== epoch) return;
     const pcm = pcmFromWav(wav);
     if (!pcm) {
       complain("the renderer sent back something that isn't a wav");
       return;
     }
     player.write(pcm, gapFor(text, opts.gapMs ?? 0));
-    opts.onSpoke?.();
+    // How long this sentence actually lasts, from the samples themselves:
+    // 16-bit mono, so two bytes a frame. Kokoro reports no word timings, and
+    // this is the honest total the reading head can be spread across.
+    opts.onSpoke?.(text, Math.round((pcm.length / 2 / RATE) * 1000));
   };
 
   return {
@@ -719,6 +769,16 @@ export function synthSpeaker(opts: {
       // Serialised, because the sentences have to reach the player in the
       // order they were written.
       queue = queue.then(() => utter(text)).catch(() => {});
+    },
+
+    cut() {
+      // The epoch first, so anything between render and write is disowned
+      // before the player is touched. The queue itself is left alone: its
+      // pending utters will find the epoch moved and return without writing,
+      // which is cheaper than tearing down a promise chain the next sentence
+      // is about to be appended to.
+      epoch++;
+      player.cut();
     },
     async drain(timeoutMs = 30_000) {
       await Promise.race([queue, new Promise((r) => setTimeout(r, timeoutMs).unref?.())]);

@@ -315,6 +315,26 @@ describe("pcmPlayer", () => {
     assert.doesNotThrow(() => pcmPlayer({ spawn: fake.spawn }).stop());
   });
 
+  test("cutting kills the player, rather than letting the sentence it holds finish", () => {
+    // The pipe already holds a whole sentence. Ending it politely would play
+    // that sentence out, which from the other side of the desk is not being
+    // interrupted at all — it is being ignored for another four seconds.
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ spawn: fake.spawn });
+    player.write(samples);
+    player.cut();
+    assert.equal(fake.last().proc.killed, true);
+  });
+
+  test("cutting leaves her able to speak again, which is the whole difference from stopping", () => {
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ spawn: fake.spawn });
+    player.write(samples);
+    player.cut();
+    player.write(samples);
+    assert.equal(fake.spawned.length, 2, "being interrupted must not cost her the voice for the session");
+  });
+
   test("draining closes the stream and waits for the tail to play out", async () => {
     const fake = fakeSpawner();
     const player = pcmPlayer({ spawn: fake.spawn });
@@ -1123,6 +1143,53 @@ describe("synthSpeaker", () => {
     });
     return { speaker, fake, problems, asked };
   };
+
+  test("a sentence still inside Kokoro when he cuts her off must not play afterwards", async () => {
+    // Rendering costs about half a second, so an interruption almost always
+    // lands while something is mid-flight. Without the epoch that sentence
+    // arrives after the room has gone quiet and she starts talking again on
+    // her own, which reads as her ignoring him.
+    let release: (() => void) | null = null;
+    const h = harness(
+      (): Promise<Buffer | null> =>
+        new Promise((resolve) => {
+          release = () => resolve(wavFromPcm(Buffer.from([1, 2, 3, 4]), 24_000));
+        }),
+    );
+    h.speaker.speak("The rest of what she was going to say.");
+    await settle();
+    h.speaker.cut!();
+    release!();
+    await settle();
+    await settle();
+    assert.equal(h.fake.spawned.length, 0, "a late render must not open the device after he cut her off");
+  });
+
+  test("cutting leaves the speaker usable, so the next turn still has a voice", async () => {
+    const h = harness();
+    h.speaker.speak("First.");
+    await h.speaker.drain!(1_000);
+    h.speaker.cut!();
+    h.speaker.speak("Second.");
+    await h.speaker.drain!(1_000);
+    assert.deepEqual(h.asked, ["First.", "Second."]);
+  });
+
+  test("reports a sentence's real length, because the hub's reading head has no audio to follow", async () => {
+    // 24000 frames of 16-bit mono is exactly one second at Kokoro's rate. The
+    // hub spreads that across the sentence's characters; if this number is
+    // wrong the head drifts off her voice and is worse than no head at all.
+    const spoke: [string, number][] = [];
+    const fake = fakeSpawner();
+    const speaker = synthSpeaker({
+      render: async () => wavFromPcm(Buffer.alloc(24_000 * 2), 24_000),
+      spawn: fake.spawn,
+      onSpoke: (text, ms) => spoke.push([text, ms]),
+    });
+    speaker.speak("A second of her.");
+    await speaker.drain!(1_000);
+    assert.deepEqual(spoke, [["A second of her.", 1_000]]);
+  });
 
   test("speaks through the renderer it was handed, not a Kokoro of its own", async () => {
     const h = harness();

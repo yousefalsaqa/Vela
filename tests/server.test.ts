@@ -1,14 +1,17 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   serve,
   readEndpoint,
+  hubUrl,
+  HUB_FILE,
   CUT_OFF,
   type RunningServer,
   type ServableCore,
+  type RoomControls,
 } from "../src/server.js";
 import { connect, reachable, parseFrames } from "../src/client.js";
 import type { CoreEvent } from "../src/core.js";
@@ -900,5 +903,338 @@ describe("the screen, served", () => {
       await real.close();
       rmSync(other, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The room is a fact, not an event.
+ *
+ * `announce` reaches whoever is attached when it fires, which is the whole
+ * story for a state *change* and only half of it for a *state*. The wake word
+ * opens a hub in the middle of a spoken turn, so the tab that most needs to
+ * know she is already talking is the one guaranteed to have missed the
+ * announcement. Answering it in the handshake is what stops two of her.
+ */
+describe("a hub that arrives mid-sentence", () => {
+  let dir: string;
+  let running: RunningServer;
+  let speaking = false;
+
+  const health = async () =>
+    (await fetch(`http://127.0.0.1:${running.endpoint.port}/health`, {
+      headers: { authorization: `Bearer ${running.endpoint.token}` },
+    }).then((r) => r.json())) as { aloud: boolean };
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "vela-aloud-"));
+    speaking = false;
+    running = await serve({
+      core: fakeCore().core,
+      endpointFile: join(dir, "server.json"),
+      aloud: () => speaking,
+    });
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("is told she is being spoken aloud, having missed the announcement", async () => {
+    speaking = true;
+    assert.equal((await health()).aloud, true);
+  });
+
+  test("is told she is not, so a quiet room does not mute the hub for good", async () => {
+    assert.equal((await health()).aloud, false);
+  });
+
+  test("asks every time, because the answer changes while the tab is open", async () => {
+    speaking = true;
+    assert.equal((await health()).aloud, true);
+    speaking = false;
+    assert.equal((await health()).aloud, false);
+  });
+
+  /**
+   * A service with no room to speak into — no Kokoro, so no wake word — must
+   * still report something the hub can read, or the speaker button goes dead
+   * on the one setup that depends on it.
+   */
+  test("a service that never speaks aloud says so rather than nothing", async () => {
+    const quiet = mkdtempSync(join(tmpdir(), "vela-quiet-"));
+    const mute = await serve({
+      core: fakeCore().core,
+      endpointFile: join(quiet, "server.json"),
+    });
+    const res = (await fetch(`http://127.0.0.1:${mute.endpoint.port}/health`, {
+      headers: { authorization: `Bearer ${mute.endpoint.token}` },
+    }).then((r) => r.json())) as { aloud: boolean };
+    assert.equal(res.aloud, false);
+    await mute.close();
+    rmSync(quiet, { recursive: true, force: true });
+  });
+});
+
+/**
+ * What the wake word checks before opening a window.
+ *
+ * Opening one per turn would be worse than never opening any, and the tab he
+ * left open is the one he is looking at.
+ */
+describe("attached", () => {
+  let dir: string;
+  let running: RunningServer;
+  let fake: ReturnType<typeof fakeCore>;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "vela-attached-"));
+    fake = fakeCore();
+    running = await serve({ core: fake.core, endpointFile: join(dir, "server.json") });
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("nobody attached is nobody watching, which is when a window is worth opening", () => {
+    assert.equal(running.attached(), 0);
+  });
+
+  test("counts a client that attached, so she does not open a second window at it", async () => {
+    const client = await connect(running.endpoint);
+    await until(() => running.attached() === 1, "the client to attach");
+    client.stop();
+  });
+
+  test("a client that left stops counting, so the next wake can open one again", async () => {
+    const client = await connect(running.endpoint);
+    await until(() => running.attached() === 1, "the client to attach");
+    client.stop();
+    await until(() => running.attached() === 0, "the client to drop");
+  });
+});
+
+/**
+ * The hub as the room's controls rather than a second room.
+ *
+ * Two microphones and two voices kept in step by announcement is what put two
+ * of her in one room. One of each, with the hub driving them, is the shape
+ * that cannot do that — so these pin the wire, and the 404 that keeps a
+ * roomless service honest about having no switches to offer.
+ */
+describe("the room, as the hub drives it", () => {
+  let dir: string;
+  let running: RunningServer;
+  let hearing = true;
+  let speaking = true;
+  let cuts = 0;
+
+  const room: RoomControls = {
+    hearing: () => hearing,
+    setHearing: (on) => (hearing = on),
+    speaking: () => speaking,
+    setSpeaking: (on) => (speaking = on),
+    cut: () => (cuts += 1),
+  };
+
+  const call = (path: string, init: RequestInit = {}) =>
+    fetch(`http://127.0.0.1:${running.endpoint.port}${path}`, {
+      ...init,
+      headers: {
+        authorization: `Bearer ${running.endpoint.token}`,
+        ...(init.headers ?? {}),
+      },
+    });
+  const set = (body: unknown) => call("/room", { method: "POST", body: JSON.stringify(body) });
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "vela-room-"));
+    hearing = true;
+    speaking = true;
+    cuts = 0;
+    running = await serve({
+      core: fakeCore().core,
+      endpointFile: join(dir, "server.json"),
+      room: () => room,
+    });
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("the handshake carries both switches, so the buttons open set correctly", async () => {
+    speaking = false;
+    const h = (await (await call("/health")).json()) as {
+      room: { hearing: boolean; speaking: boolean };
+    };
+    assert.deepEqual(h.room, { hearing: true, speaking: false });
+  });
+
+  test("stopping her cuts the sentence sounding now", async () => {
+    await set({ stop: true });
+    assert.equal(cuts, 1);
+  });
+
+  test("being interrupted is about this reply, not every reply after it", async () => {
+    // The distinction the two buttons cannot express: mute is a standing
+    // setting, this is having heard enough of one answer. If interrupting her
+    // also muted her, the next thing he asked would come back in silence and
+    // read as her being broken.
+    await set({ stop: true });
+    const now = (await (await set({})).json()) as { hearing: boolean; speaking: boolean };
+    assert.deepEqual(now, { hearing: true, speaking: true });
+  });
+
+  test("only a real true cuts her off, so a typo cannot silence her mid-sentence", async () => {
+    await set({ stop: "yes" });
+    assert.equal(cuts, 0, "the toggles already refuse anything but a boolean; this is the same bar");
+  });
+
+  test("muting him stops her hearing the room", async () => {
+    await set({ hearing: false });
+    assert.equal(hearing, false);
+  });
+
+  test("muting her leaves his microphone alone", async () => {
+    await set({ speaking: false });
+    assert.equal(speaking, false);
+    assert.equal(hearing, true, "muting her voice must not mute him too");
+  });
+
+  /**
+   * The page redraws from the reply rather than from what it assumed, so the
+   * reply has to be the state after the change and not merely an ack.
+   */
+  test("answers with the state that resulted, which is what the hub redraws from", async () => {
+    const res = await set({ hearing: false, speaking: false });
+    assert.deepEqual(await res.json(), { hearing: false, speaking: false });
+  });
+
+  test("an absent switch is left alone rather than defaulted off", async () => {
+    await set({ speaking: false });
+    await set({ hearing: false });
+    assert.equal(speaking, false, "the earlier mute must survive a later unrelated one");
+  });
+
+  /**
+   * Only a real boolean moves a switch. A typo'd or absent field arriving as
+   * undefined must not read as "off" and mute a microphone he never touched.
+   */
+  test("a non-boolean does not move a switch", async () => {
+    await set({ hearing: "no", speaking: 0 });
+    assert.equal(hearing, true);
+    assert.equal(speaking, true);
+  });
+
+  test("a body that is not JSON is rejected rather than ignored", async () => {
+    const res = await call("/room", { method: "POST", body: "not json" });
+    assert.equal(res.status, 400);
+    assert.equal(hearing, true);
+  });
+});
+
+/**
+ * A service that is not in a room has no switches to offer, and must say so
+ * rather than accept the call and do nothing. A control that reports working
+ * and changes nothing is the exact failure this whole shape is undoing.
+ */
+describe("a service with no room", () => {
+  let dir: string;
+  let running: RunningServer;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "vela-noroom-"));
+    running = await serve({ core: fakeCore().core, endpointFile: join(dir, "server.json") });
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("says it has no room, so the hub keeps its own microphone and voice", async () => {
+    const h = (await (await fetch(`http://127.0.0.1:${running.endpoint.port}/health`, {
+      headers: { authorization: `Bearer ${running.endpoint.token}` },
+    })).json()) as { room: unknown };
+    assert.equal(h.room, null);
+  });
+
+  test("refuses to mute a room it does not have", async () => {
+    const res = await fetch(`http://127.0.0.1:${running.endpoint.port}/room`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${running.endpoint.token}` },
+      body: JSON.stringify({ hearing: false }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+describe("the URL she opens, held against the page it opens", () => {
+  const endpoint = { port: 4823, token: "a".repeat(48), pid: 1234 };
+
+  /**
+   * Every query parameter hub.html reads out of its own address bar.
+   *
+   * Read out of the source text because there is no other way to reach it: the
+   * page is served as bytes and imports nothing, so its half of this contract
+   * exists only as a string literal. If someone rewrites those lines to hold
+   * the URLSearchParams in a variable this stops finding them and the tests
+   * below fail — which is the right direction to fail in. A false alarm is
+   * loud and gets fixed; the silence this guards against is neither.
+   */
+  const readByHub = (): Set<string> => {
+    const page = readFileSync(HUB_FILE, "utf8");
+    return new Set(
+      [...page.matchAll(/URLSearchParams\(location\.search\)\.get\("([^"]+)"\)/g)].map(
+        (m) => m[1],
+      ),
+    );
+  };
+
+  const writtenByHer = (): Set<string> =>
+    new Set(new URL(hubUrl(endpoint)).searchParams.keys());
+
+  test("the page still reads its address bar at all, or the two tests below prove nothing", () => {
+    assert.ok(
+      readByHub().size > 0,
+      "found no URLSearchParams(location.search).get(...) in hub.html: this suite can no longer see the page's half of the contract, so it is not checking it",
+    );
+  });
+
+  test("every parameter she puts in the URL is one the page reads back", () => {
+    const read = readByHub();
+    for (const name of writtenByHer()) {
+      assert.ok(
+        read.has(name),
+        `she opens the hub with ?${name}= and hub.html never reads it. Nothing throws when these drift apart — the parameter simply stops arriving and the feature it carried goes quiet.`,
+      );
+    }
+  });
+
+  test("every parameter the page reads is one she puts there", () => {
+    const written = writtenByHer();
+    for (const name of readByHub()) {
+      assert.ok(
+        written.has(name),
+        `hub.html reads ?${name}= out of its address bar and she never writes it, so it is always empty`,
+      );
+    }
+  });
+
+  test("the token survives the trip through the address bar", () => {
+    const url = new URL(hubUrl(endpoint));
+    assert.equal(url.searchParams.get("k"), endpoint.token);
+  });
+
+  test("the same endpoint gives the same link every time, so a pinned tab keeps working", () => {
+    assert.equal(
+      hubUrl(endpoint),
+      hubUrl({ ...endpoint }),
+      "anything per-window in this URL is a link he cannot pin, which is what the durable token exists to give him",
+    );
   });
 });

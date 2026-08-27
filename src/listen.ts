@@ -408,6 +408,13 @@ export const MAX_SILENCE = 0.5;
 export const MIN_LOGPROB = -1.0;
 
 /**
+ * Three of the same word and nothing else is a decoder, not a person.
+ *
+ * Two is a real thing to say — "no, no" — so the bar sits above it.
+ */
+export const MAX_REPEAT = 3;
+
+/**
  * Was that speech, or was it whisper filling silence?
  *
  * cleanTranscript catches the hallucinations whisper repeats — "You.", "Thank
@@ -419,6 +426,20 @@ export const MIN_LOGPROB = -1.0;
 export interface Limits {
   maxSilence?: number;
   minLogprob?: number;
+  /**
+   * How many times one word may repeat before it stops being speech.
+   *
+   * The two numbers above describe the audio, which is what makes them work on
+   * a sentence nobody has seen before. They do not catch the failure a *prompt*
+   * causes: primed with a rare word, the decoder reaches for it when it is
+   * guessing, and what comes back is that word several times over. "Vela. Vela.
+   * Vela. Vela." came out of a film soundtrack this way and read as confident,
+   * because the decoder was confident — it was repeating something it had been
+   * handed rather than inventing it.
+   *
+   * Nobody says the same word four times in a row to a microphone. 0 is off.
+   */
+  maxRepeat?: number;
 }
 
 /** What may be decided for one utterance rather than for the whole worker. */
@@ -442,7 +463,7 @@ export interface HearOptions extends Limits {
  * alone, which is why it needs the bar at all. Judging a held key by the same
  * standard would throw away the quiet real sentence it exists to catch.
  */
-export const HEARD_ANYTHING: Limits = { maxSilence: 1, minLogprob: -Infinity };
+export const HEARD_ANYTHING: Limits = { maxSilence: 1, minLogprob: -Infinity, maxRepeat: 0 };
 
 /**
  * Decode with no prior, and hold what comes back to the strict bar.
@@ -452,6 +473,35 @@ export const HEARD_ANYTHING: Limits = { maxSilence: 1, minLogprob: -Infinity };
  */
 export const UNPROMPTED: HearOptions = { vocabulary: "" };
 
+/**
+ * What an open microphone should ask for, given the prior it has been allowed.
+ *
+ * Empty is UNPROMPTED and stays the default, because priming a decoder with a
+ * rare word makes it produce that word out of room tone. The exception is a
+ * decoder that cannot produce the word at all: base.en never learned the name,
+ * so it returns the nearest English it knows — panel, Madam, Zeno — while the
+ * ordinary words around it decode cleanly. A prior of the name by itself is
+ * the narrowest thing that fixes that, and the strict bar still judges what
+ * comes back.
+ */
+export const wakePrior = (vocabulary: string): HearOptions =>
+  vocabulary ? { vocabulary } : UNPROMPTED;
+
+/**
+ * Is this one word, said over and over, and nothing else?
+ *
+ * Only when the whole transcript is that word: "go, go, go" is a real thing to
+ * say, and so is a sentence that happens to repeat one. What this catches is a
+ * transcript with no other content, which is what a decoder produces when it
+ * is echoing its own prior rather than reading audio.
+ */
+export function isStutter(text: string, most: number): boolean {
+  if (most <= 0) return false;
+  const words = [...text.toLowerCase().matchAll(/[a-z0-9']+/g)].map((m) => m[0]);
+  if (words.length < most) return false;
+  return new Set(words).size === 1;
+}
+
 export function saidSomething(heard: Heard, limits: Limits = {}): boolean {
   if (!heard.text) return false;
   const maxSilence = limits.maxSilence ?? MAX_SILENCE;
@@ -460,6 +510,9 @@ export function saidSomething(heard: Heard, limits: Limits = {}): boolean {
   // evidence of silence: let it through and leave it to cleanTranscript.
   if (heard.silence !== undefined && heard.silence > maxSilence) return false;
   if (heard.logprob !== undefined && heard.logprob < minLogprob) return false;
+  // Last, because it judges the words rather than the audio, and a confident
+  // repetition is exactly what the two numbers above cannot see.
+  if (isStutter(heard.text, limits.maxRepeat ?? MAX_REPEAT)) return false;
   return true;
 }
 
@@ -521,6 +574,16 @@ export function createTranscriber(opts: {
    * the bar cannot be tuned against a decision nobody can see. Diagnostics.
    */
   onDropped?: (heard: Heard) => void;
+  /**
+   * An utterance that cleared the bar, with the numbers it cleared it by.
+   *
+   * The mirror of onDropped, and missing for longer than it should have been.
+   * A rejection printed its score and an acceptance printed nothing, so the
+   * only wakes anyone could reason about were the ones that did not happen —
+   * and a false wake, the one failure that matters here, is by definition an
+   * acceptance. Diagnostics.
+   */
+  onKept?: (heard: Heard) => void;
   onProblem?: (why: string) => void;
   spawn?: Spawner;
 }): Transcriber {
@@ -615,6 +678,7 @@ export function createTranscriber(opts: {
           if (text) opts.onDropped?.(weighed);
           return "";
         }
+        if (text) opts.onKept?.(weighed);
         return text;
       } catch {
         complain("whisper sent back something that isn't JSON");

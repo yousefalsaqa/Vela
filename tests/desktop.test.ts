@@ -102,13 +102,32 @@ describe("launchApp", () => {
 });
 
 describe("mediaKey", () => {
-  for (const [action, code] of Object.entries(MEDIA_KEYS)) {
-    test(`sends ${action}`, async () => {
+  for (const [action, vk] of Object.entries(MEDIA_KEYS)) {
+    test(`sends ${action} as a full press, down then up`, async () => {
       const { calls, exec } = spy();
       assert.equal(await mediaKey(action as "playpause", exec), `Sent ${action}.`);
-      assert.match(calls[0], new RegExp(`SendKeys\\('${code.replace(/[{}]/g, "\\$&")}'\\)$`));
+      assert.match(
+        calls[0],
+        new RegExp(`keybd_event\\(${vk}, 0, 0,`),
+        "the key must go down",
+      );
+      assert.match(
+        calls[0],
+        new RegExp(`keybd_event\\(${vk}, 0, 2,`),
+        "without the up, Windows believes the key is held forever",
+      );
     });
   }
+
+  test("never goes near SendKeys, which has no tokens for media keys", async () => {
+    // The original implementation used SendKeys('{MEDIA_PLAY_PAUSE}'), which
+    // throws at runtime: those brace names were never in its vocabulary. The
+    // old test asserted that exact string, went green, and certified a media
+    // control that had never once worked.
+    const { calls, exec } = spy();
+    await mediaKey("playpause", exec);
+    assert.doesNotMatch(calls[0], /SendKeys/);
+  });
 
   test("refuses an unknown action without touching the shell", async () => {
     const { calls, exec } = spy();

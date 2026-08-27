@@ -17,6 +17,8 @@ import {
   saidSomething,
   HEARD_ANYTHING,
   UNPROMPTED,
+  wakePrior,
+  isStutter,
   cliTranscriber,
   resolveWinGetBinary,
   audioDevices,
@@ -907,5 +909,99 @@ describe("openMic", () => {
     // A caller waiting on a device that will never open waits forever.
     await mic.ready;
     mic.close();
+  });
+});
+
+describe("wakePrior", () => {
+  /**
+   * The default has to stay no-prior. Priming the decoder with her name is what
+   * made a quiet room produce "For a second, Kokoro", and the wake word is the
+   * one caller that cannot promise anyone spoke.
+   */
+  test("no vocabulary is UNPROMPTED, not a missing prompt", () => {
+    assert.equal(wakePrior("").vocabulary, "");
+    assert.deepEqual(wakePrior(""), UNPROMPTED);
+  });
+
+  /**
+   * "" and undefined mean opposite things on the wire: the worker reads an
+   * absent prompt as "use your startup vocabulary" and an empty one as "no
+   * prior at all". Returning undefined here would hand the wake word the very
+   * list it was taken off.
+   */
+  test("never leaves the prompt absent, which the worker reads as the vocabulary", () => {
+    assert.notEqual(wakePrior("").vocabulary, undefined);
+  });
+
+  /** Her name alone, when base.en cannot otherwise produce it. */
+  test("passes a prior through when this microphone needs one", () => {
+    assert.deepEqual(wakePrior("Vela."), { vocabulary: "Vela." });
+  });
+});
+
+/**
+ * The failure a prompt causes, which the confidence numbers cannot see.
+ *
+ * `maxSilence` and `minLogprob` describe the audio, which is what lets them
+ * judge a sentence nobody has said before. Priming the decoder with a rare
+ * word breaks that: it returns the word it was handed, several times over, and
+ * scores itself confident because it is repeating rather than inventing. This
+ * is what "Vela. Vela. Vela. Vela." out of a film soundtrack looked like.
+ */
+describe("isStutter", () => {
+  test("her name four times out of a soundtrack is not someone saying it", () => {
+    assert.equal(isStutter("Vela. Vela. Vela. Vela.", 3), true);
+  });
+
+  test("punctuation and case do not hide the repetition", () => {
+    assert.equal(isStutter("vela vela VELA!", 3), true);
+  });
+
+  /** Two is a real thing to say, so the bar sits above it. */
+  test("saying it twice is a person being emphatic", () => {
+    assert.equal(isStutter("Vela, Vela", 3), false);
+  });
+
+  /**
+   * Only when the repetition is the *whole* transcript. A sentence that
+   * happens to repeat a word is still a sentence, and throwing it away would
+   * cost him the turn.
+   */
+  test("a real sentence carrying a repeat is left alone", () => {
+    assert.equal(isStutter("Vela, Vela, are you there", 3), false);
+    assert.equal(isStutter("no no no I meant the other one", 3), false);
+  });
+
+  test("a plain sentence is not a stutter", () => {
+    assert.equal(isStutter("what is on my calendar today", 3), false);
+  });
+
+  test("nothing at all is not a stutter", () => {
+    assert.equal(isStutter("", 3), false);
+  });
+
+  test("0 turns it off, which is what a held key gets", () => {
+    assert.equal(isStutter("Vela. Vela. Vela. Vela.", 0), false);
+  });
+});
+
+describe("saidSomething, against a confident repetition", () => {
+  /**
+   * The point of the whole guard: this scores *well*. The decoder was not
+   * unsure, it was echoing, so nothing about the audio gives it away.
+   */
+  test("throws out a repetition that the confidence numbers happily allow", () => {
+    const echo = { text: "Vela. Vela. Vela. Vela.", silence: 0.01, logprob: -0.2 };
+    assert.equal(saidSomething(echo, { maxSilence: 0.5, minLogprob: -1 }), false);
+  });
+
+  test("a held key still gets it, because he promised he spoke", () => {
+    const echo = { text: "Vela. Vela. Vela. Vela.", silence: 0.01, logprob: -0.2 };
+    assert.equal(saidSomething(echo, HEARD_ANYTHING), true);
+  });
+
+  test("a real sentence with good scores is untouched", () => {
+    const real = { text: "Vela, what is on my calendar", silence: 0.02, logprob: -0.3 };
+    assert.equal(saidSomething(real), true);
   });
 });

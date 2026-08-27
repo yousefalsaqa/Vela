@@ -138,6 +138,13 @@ body[data-state="lost"] .state { color: var(--wrong); }
   position: relative;
   padding: 0 var(--pad);
   min-height: 0;
+  /* One row, so the thread is bounded by the desk rather than merely clipped
+     by it. Without this the thread is a block of content height: it grows past
+     the floor, overflow:hidden below cuts it off, and because it never
+     overflows *itself* its own overflow-y:auto has nothing to scroll. The
+     panels are absolute and sit outside this. */
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   /* The desk's own edges. A panel's rectangle is worked out against the floor
      at load; when the composer grows for a multi-line message the floor
      shrinks under it, and without this a low panel would keep its old size
@@ -706,6 +713,7 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
    sandboxed screen frame has no way to read. */
 const STORE = "vela.key";
 const fromBar = new URLSearchParams(location.search).get("k") || "";
+
 let stored = "";
 try { stored = localStorage.getItem(STORE) || ""; } catch { stored = ""; }
 if (fromBar) {
@@ -959,6 +967,9 @@ function hers() {
   // `raw` is what she actually sent; `words` is that with the markdown taken
   // out, which is what is drawn and what the reading head measures against.
   open = { el, said, caret, startedAt: Date.now(), firstDelta: 0, raw: "", words: "", spoken: 0, emitted: 0, spans: [], steps: [] };
+  // Last turn's unspoken ranges belong to text that is no longer the live one.
+  roomHead();
+  roomSaid.length = 0;
   cutSpeaking = false; // a new reply gets a clean voice, whatever happened to the last
   setState("working", "working");
   follow();
@@ -1398,6 +1409,87 @@ let speaking = false, canSpeak = false, speakingNow = false;
    two of her talking at once is worse than neither. Cleared on reconnect: a
    stream that dropped mid-reply must not leave this tab mute for good. */
 let aloud = false;
+/**
+ * Whether she is in a room, and what its two switches are set to.
+ *
+ * A service with a microphone and speakers of its own already has one voice
+ * and one pair of ears. This page used to bring a second of each and keep them
+ * in step by announcement, which is how two of her ended up answering. When
+ * there is a room, these buttons drive it: the microphone is hers, the voice
+ * is hers, and the hub is where he reaches them. With no room — a service that
+ * cannot hear or speak for itself — the browser's own are all there is, and
+ * the buttons work exactly as they always did.
+ */
+let inRoom = false, roomHearing = true, roomSpeaking = true;
+
+/* Sentences she is going to say in the room, in the order this page split
+   them, each with where it sits in her words. Filled by enqueue, emptied by
+   the "saying" events as her voice actually reaches them. */
+let roomSaid = [];
+/* Ends the sweep running now. Reassigned by each one; a no-op before the
+   first. */
+let roomHead = () => {};
+
+/* Reduce to the letters, which is all the two sides agree on: what the room
+   speaks has been through speakable() and what is on screen has been through
+   forReading(), so punctuation, markdown and URLs differ by design. */
+const bare = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+/**
+ * The range the room has just started saying.
+ *
+ * Normally the front of the queue: both sides split the same text with the
+ * same rules, so the orders agree. The search is for when they do not — one
+ * side collapsing a clause the other kept — where taking the front regardless
+ * would put the head on the wrong sentence and leave it wrong for the rest of
+ * the turn. Looking a few ahead resyncs instead, and dropping what it skipped
+ * is right: those sentences were never spoken.
+ */
+function roomNext(text) {
+  const want = bare(text).slice(0, 16);
+  if (!want) return roomSaid.shift() || null;
+  for (let i = 0; i < roomSaid.length && i < 4; i++) {
+    if (bare(roomSaid[i].said).slice(0, 16) === want) return roomSaid.splice(0, i + 1).pop();
+  }
+  return roomSaid.shift() || null;
+}
+
+/**
+ * The reading head, on the room's clock rather than an audio element's.
+ *
+ * sweep() follows currentTime on the audio this page is playing. There is no
+ * such audio in a room, so this follows wall time from the moment the room
+ * said it had started, across the real length of the samples. It is the same
+ * approximation as sweep() — a sentence's duration spread over its characters
+ * — and it stops where she stops, because being cut off clears the queue and
+ * the next call ends this one.
+ */
+function sweepRoom(item, ms) {
+  roomHead();
+  if (!item || !item.spans || !item.range || !ms) return;
+  const [from, to] = item.range;
+  const width = to - from;
+  const mine = item.spans.filter((s) => s.start >= from && s.end <= to);
+  if (!mine.length || !width) return;
+
+  const began = performance.now();
+  let alive = true;
+  (function tick() {
+    if (!alive) return;
+    requestAnimationFrame(tick);
+    const head = from + Math.min(1, (performance.now() - began) / ms) * width;
+    for (const s of mine) {
+      s.el.classList.toggle("saying", s.start <= head && head < s.end);
+      s.el.classList.toggle("said", s.end <= head);
+    }
+  })();
+
+  roomHead = () => {
+    alive = false;
+    for (const s of mine) s.el.classList.remove("saying");
+  };
+}
+
 let audioQueue = [], playing = false, current = null, sound = null;
 // The teardown for the sentence sounding right now, so hush() can end it the
 // same way it would end on its own rather than pausing it half-alive.
@@ -1471,7 +1563,17 @@ async function enqueue(sentence, range) {
   // a URL out loud. The range stays in the coordinates of what is on screen,
   // which is what the reading head sweeps across.
   const said = forSaying(sentence).trim();
-  if (!said || !canSpeak || !speaking || cutSpeaking || aloud) return;
+  if (!said) return;
+  /* In a room she says this herself, so the page renders no audio for it. It
+     still keeps the range: the reading head is the only thing on screen that
+     shows where her voice has got to, and losing it was the cost of moving the
+     voice out of the browser. What it lacks is a clock, and the room sends one
+     — see the "saying" event. */
+  if (inRoom) {
+    if (range && open) roomSaid.push({ said, range, spans: open.spans });
+    return;
+  }
+  if (!canSpeak || !speaking || cutSpeaking || aloud) return;
   audioQueue.push({ said, range: range || null, spans: (open && open.spans) || null });
   if (!playing) drainAudio();
 }
@@ -1598,7 +1700,9 @@ function hush(cut) {
 
 const ENDS = /[.!?]["')\]]?(\s|$)/g;
 function speakReady(t) {
-  if (!speaking) return;
+  // In a room this earns its keep by splitting alone: enqueue takes the ranges
+  // and plays nothing.
+  if (!speaking && !inRoom) return;
   ENDS.lastIndex = 0;
   let cut = -1, m;
   while ((m = ENDS.exec(t.words))) cut = m.index + m[0].length;
@@ -1610,7 +1714,7 @@ function speakReady(t) {
   }
 }
 function speakRest(t) {
-  if (speaking && t.words.length > t.spoken) {
+  if ((speaking || inRoom) && t.words.length > t.spoken) {
     for (const [piece, from, to] of clausesOf(t.words.slice(t.spoken), t.spoken)) {
       enqueue(piece, [from, to]);
     }
@@ -1627,6 +1731,10 @@ function warm(what) {
 }
 
 earKey.addEventListener("click", () => {
+  // In a room she has a voice of her own and this governs it. The page stays
+  // silent either way, which is what makes a second of her impossible rather
+  // than merely unlikely.
+  if (inRoom) { setRoom({ speaking: !roomSpeaking }); return; }
   speaking = !speaking;
   earKey.setAttribute("aria-pressed", String(speaking));
   // Inside the click, because this is the gesture the browser wants before it
@@ -1639,6 +1747,35 @@ earKey.addEventListener("click", () => {
    His voice
    ════════════════════════════════════════════════════════════════════════ */
 let recorder = null, chunks = [], canHear = false, cutOff = false, micStream = null;
+
+
+/* Mute is a state, not an action, so both buttons have to read as one. */
+function drawRoom() {
+  if (!inRoom) return;
+  micKey.setAttribute("aria-pressed", String(roomHearing));
+  micKey.classList.toggle("hot", roomHearing);
+  micKey.title = roomHearing ? "She can hear you. Mute." : "Muted. Let her hear you.";
+  micKey.setAttribute("aria-label", micKey.title);
+  earKey.setAttribute("aria-pressed", String(roomSpeaking));
+  earKey.title = roomSpeaking ? "She answers out loud. Mute her." : "Muted. Let her answer out loud.";
+  earKey.setAttribute("aria-label", earKey.title);
+}
+
+/* The server owns both switches; this page only asks. Taking the reply as the
+   truth rather than assuming the click landed keeps the two in step when a
+   request fails or something else has already changed them. */
+async function setRoom(want) {
+  try {
+    const res = await fetch("/room", { method: "POST", headers: json, body: JSON.stringify(want) });
+    if (!res.ok) throw new Error(String(res.status));
+    const now = await res.json();
+    roomHearing = Boolean(now.hearing);
+    roomSpeaking = Boolean(now.speaking);
+    drawRoom();
+  } catch {
+    hitch("Could not reach her microphone.");
+  }
+}
 
 async function startListening() {
   /* Talking over her is an answer in itself: she has said enough. Stop her
@@ -1695,6 +1832,9 @@ async function onHeard() {
 }
 
 micKey.addEventListener("click", () => {
+  // In a room this is a mute, not a record button: she is already listening,
+  // and this says whether she is allowed to.
+  if (inRoom) { setRoom({ hearing: !roomHearing }); return; }
   if (recorder && recorder.state === "recording") recorder.stop();
   else startListening();
 });
@@ -1727,6 +1867,24 @@ function abandon(why) {
   follow();
 }
 
+/* He has let her go, so take her off his screen.
+
+   Every hub obeys this, not a chosen one. Telling her windows from his needed
+   an id in the address bar, and that made the link different every time, which
+   is the one thing the pinned link cannot survive.
+
+   window.close() is a request, not a guarantee. A page may only close itself
+   where it has no history to go back to, which this one does satisfy — the key
+   leaves the address bar by replaceState rather than a navigation — but that is
+   the browser's call, and Firefox refuses outright. So say goodbye on screen
+   first: if the window does go, nobody reads it, and if it stays, he is looking
+   at a page that knows the conversation ended rather than one frozen mid-reply
+   pretending to still be listening. */
+function farewell() {
+  setState("idle", "goodbye");
+  window.close();
+}
+
 function listen() {
   const events = new EventSource("/events?k=" + encodeURIComponent(KEY));
   let dropped = false;
@@ -1750,6 +1908,8 @@ function listen() {
     else if (ev.type === "result") done(ev.ms, ev.text);
     else if (ev.type === "say") unbidden(ev.text || "");
     else if (ev.type === "show") showScreen(ev.screen);
+    else if (ev.type === "saying") sweepRoom(roomNext(ev.text || ""), ev.ms || 0);
+    else if (ev.type === "dismissed") farewell();
     else if (ev.type === "error") { hitch(ev.message || "Something went wrong."); open = null; doing(""); endWorks(); setState("idle", "with you"); }
   };
   // It reconnects itself. Say so, because silence is also what working looks like.
@@ -1819,6 +1979,25 @@ dock.addEventListener("submit", (e) => {
   grow();
   typing();
   say(said);
+});
+
+/* Enough.
+
+   In a room the two buttons are settings — whether she may hear him at all,
+   whether she answers out loud at all — and neither is what someone reaches
+   for mid-sentence. This is: the key that means stop everywhere else, meaning
+   stop here, about this reply only. Outside a room it is the same gesture
+   against the page's own voice, which is what hush() already was. */
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const el = document.activeElement;
+  if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return;
+  if (!inRoom) { hush(); return; }
+  // Locally first, so the head goes out on the keypress rather than on the
+  // round trip: she is already quiet by the time the response lands.
+  roomHead();
+  roomSaid.length = 0;
+  setRoom({ stop: true });
 });
 
 addEventListener("keydown", (e) => {
@@ -1893,9 +2072,23 @@ if (!KEY) {
       probe.textContent = h.name.toLowerCase() + " · pid " + h.pid;
       canHear = Boolean(h.canHear);
       canSpeak = Boolean(h.canSpeak);
+      /* This tab may have opened part-way through a reply she is already
+         saying out loud — the wake word opens one when she is addressed. The
+         announcement that would have said so went out before this page
+         existed, so the state comes from the handshake instead. Without it the
+         speaker button would talk over her. */
+      aloud = Boolean(h.aloud);
+      /* In a room, both buttons work whatever this service can do for a
+         browser: they are the room's switches, not this page's. */
+      inRoom = Boolean(h.room);
+      if (inRoom) {
+        roomHearing = Boolean(h.room.hearing);
+        roomSpeaking = Boolean(h.room.speaking);
+      }
       // A control that cannot work is worse than no control.
-      micKey.hidden = !canHear;
-      earKey.hidden = !canSpeak;
+      micKey.hidden = !inRoom && !canHear;
+      earKey.hidden = !inRoom && !canSpeak;
+      drawRoom();
     })
     .catch(() => {});
 

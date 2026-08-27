@@ -48,14 +48,17 @@ export const WEB_FALLBACKS: Record<string, string> = {
   spotify: "https://open.spotify.com",
 };
 
-/** Virtual key codes for the media keys, sent via the WScript shell. */
-export const MEDIA_KEYS: Record<string, string> = {
-  playpause: "{MEDIA_PLAY_PAUSE}",
-  next: "{MEDIA_NEXT_TRACK}",
-  previous: "{MEDIA_PREV_TRACK}",
-  mute: "{VOLUME_MUTE}",
-  volumeup: "{VOLUME_UP}",
-  volumedown: "{VOLUME_DOWN}",
+/**
+ * Virtual key codes for the media keys, sent via keybd_event. SendKeys has no
+ * tokens for these — the hardware media keys exist only as VK codes.
+ */
+export const MEDIA_KEYS: Record<string, number> = {
+  playpause: 0xb3,
+  next: 0xb0,
+  previous: 0xb1,
+  mute: 0xad,
+  volumeup: 0xaf,
+  volumedown: 0xae,
 };
 
 export function resolveTarget(target: string): { key: string; resolved: string } {
@@ -87,10 +90,17 @@ export async function mediaKey(
   action: "playpause" | "next" | "previous" | "mute" | "volumeup" | "volumedown",
   exec: PsRunner = ps,
 ): Promise<string> {
-  const key = MEDIA_KEYS[action];
-  if (!key) return `Unknown media action: ${action}`;
+  const vk = MEDIA_KEYS[action];
+  if (!vk) return `Unknown media action: ${action}`;
 
-  await exec(`$w = New-Object -ComObject WScript.Shell; $w.SendKeys(${q(key)})`);
+  // A press is a down and an up; flag 2 is KEYEVENTF_KEYUP. Sending only the
+  // down leaves Windows believing the key is held.
+  await exec(
+    `if (-not ('Vela.Media' -as [type])) { Add-Type -Namespace Vela -Name Media -MemberDefinition ` +
+      `'[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);' }; ` +
+      `[Vela.Media]::keybd_event(${vk}, 0, 0, [UIntPtr]::Zero); ` +
+      `[Vela.Media]::keybd_event(${vk}, 0, 2, [UIntPtr]::Zero)`,
+  );
   return `Sent ${action}.`;
 }
 

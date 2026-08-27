@@ -1,6 +1,6 @@
 import { buildContextBlock, close } from "./memory.js";
 import { createCore } from "./core.js";
-import { serve, readEndpoint, type Endpoint } from "./server.js";
+import { serve, readEndpoint, hubUrl, type RoomControls } from "./server.js";
 import { reachable } from "./client.js";
 import { spawn } from "./proc.js";
 import {
@@ -12,7 +12,7 @@ import {
   audioDevices,
   pickDevice,
   HEARD_ANYTHING,
-  UNPROMPTED,
+  wakePrior,
 } from "./listen.js";
 import { kokoroSynth, synthSpeaker, createVoice, PRONOUNCE_PHONEMES } from "./voice.js";
 import { startWakeListener, type WakeListener } from "./wake.js";
@@ -32,6 +32,8 @@ import {
   SKILLS,
   NAME,
   OPEN_HUB,
+  WAKE_OPENS_HUB,
+  WAKE_CLOSES_HUB,
   PORT,
   KEEP_TOKEN,
   LAZY_WORKERS,
@@ -55,14 +57,13 @@ import {
   WAKE_DEBUG,
   WAKE_MARGIN_DB,
   WAKE_MAX_MS,
+  WAKE_PREROLL_MS,
   WAKE_FLOOR_MAX,
+  WAKE_VOCABULARY,
   WAKE_FOLLOWUP_MS,
   WAKE_FOLLOWUPS,
   WAKE_BYE,
 } from "./config.js";
-
-/** Where her second face lives. The token rides in the URL; see server.ts. */
-const hubUrl = (e: Endpoint) => `http://127.0.0.1:${e.port}/?k=${e.token}`;
 
 /**
  * Hand the URL to whatever the machine uses for links.
@@ -141,6 +142,16 @@ async function main() {
             );
           }
         },
+        // The scores a wake was accepted on. Without these the log showed
+        // every utterance she ignored and nothing about the one she answered,
+        // which is the only one a false wake can be.
+        onKept: ({ text, silence, logprob }) => {
+          if (WAKE_DEBUG) {
+            console.log(
+              `  [90m✓ silence ${silence?.toFixed(2)} logprob ${logprob?.toFixed(2)}  ${text}[0m`,
+            );
+          }
+        },
         onProblem: (why) => console.log(`  Transcription: ${why}`),
       })
     : cliTranscriber({ model: WHISPER_MODEL, computeDevice: WHISPER_DEVICE });
@@ -157,9 +168,31 @@ async function main() {
       })
     : null;
 
+  /**
+   * True only for a turn the wake word started, and she is speaking it aloud.
+   *
+   * Declared out here because two things need it: the room's own mouth, below,
+   * and the handshake a hub does when it attaches. A hub that opens part-way
+   * through a spoken turn has to be told the room is not silent, or it says
+   * the rest of the reply over her.
+   */
+  let answering = false;
+
+  /**
+   * The room's controls, once there is a room.
+   *
+   * Null until the wake word is listening, and null forever on a service that
+   * has no microphone or no voice — which is what tells the hub to fall back
+   * to its own. Late-bound because the room is built after the server: the
+   * wake word needs somewhere to announce before it can listen.
+   */
+  let room: RoomControls | null = null;
+
   const server = await serve({
     core,
     name: NAME,
+    aloud: () => answering,
+    room: () => room,
     // A fixed port and a kept token are what make her hub pinnable.
     port: PORT,
     keepToken: KEEP_TOKEN,
@@ -207,13 +240,33 @@ async function main() {
     const voice = createVoice(speaker.speak, PRONOUNCE_PHONEMES);
 
     /**
-     * True only for a turn the wake word started.
+     * The two mutes, which are the hub's two buttons.
      *
-     * Everything the core does is broadcast to everyone attached, so without
-     * this a sentence typed into the hub would be played twice: once by the
-     * browser that asked for it and once out of the speakers here.
+     * Muting him is not the same as the hold she puts on the microphone while
+     * she is talking, even though both stop her hearing: the hold is hers and
+     * ends when she stops, this is his and ends when he says so. Everything
+     * that resumes after a reply has to ask this first, or her own hold would
+     * quietly un-mute him at the end of every turn.
+     *
+     * Muting her is narrower than it sounds. She still takes the turn, still
+     * thinks, still writes every word into the hub — she just does not say it
+     * into the room. Which is the point: he wanted to stop the noise without
+     * stopping her.
      */
-    let answering = false;
+    let hearing = true;
+    let speakingAloud = true;
+    /**
+     * He has heard enough of this particular reply.
+     *
+     * Narrower than muting her, and it has to be per-turn: voice.stop() only
+     * empties the buffer, so without a flag every delta still arriving would
+     * be spoken straight past the interruption. Cleared when the next turn
+     * opens, because being cut off once is not a setting.
+     */
+    let cutTurn = false;
+    const listenAgain = () => {
+      if (hearing) listener.resume();
+    };
 
     /**
      * The end of a spoken turn: say the last fragment, wait for the room to
@@ -235,17 +288,68 @@ async function main() {
       server.announce({ type: "aloud", value: false });
       voice.flush();
       await speaker.drain?.().catch(() => {});
-      listener.resume();
+      listenAgain();
     };
 
     core.subscribe((event) => {
       if (!answering) return;
-      if (event.type === "delta") voice.push(event.text);
+      if (event.type === "delta") { if (speakingAloud && !cutTurn) voice.push(event.text); }
       else if (event.type === "result") {
-        if (event.text) voice.push(event.text);
+        if (event.text && speakingAloud && !cutTurn) voice.push(event.text);
         void finish();
       } else if (event.type === "error") void finish();
     });
+
+    /**
+     * Put her on screen, because she has just been spoken to.
+     *
+     * Being answered by a voice from a laptop showing nothing is the problem
+     * this solves: he cannot see what she is doing, what she is working from,
+     * or how to stop her. A hub opened the moment she is addressed is all
+     * three, and it is already the thing that can stop her.
+     *
+     * Not once per turn. A tab already attached is the one he is looking at,
+     * and the seconds a browser takes to start and connect are seconds when
+     * nothing is attached yet — so a follow-up in that gap would open a second
+     * window on top of the first. The stamp covers the gap, `attached` the rest.
+     */
+    let openedAt = 0;
+    const showHer = () => {
+      if (!WAKE_OPENS_HUB) return;
+      if (server.attached() > 0) return;
+      if (openedAt && Date.now() - openedAt < 20_000) return;
+      openedAt = Date.now();
+      openInBrowser(hubUrl(server.endpoint));
+    };
+
+    /**
+     * Take it away again, now the conversation is over.
+     *
+     * Announced rather than done, because nothing on this side of the socket
+     * can close a browser window: the page has to close itself, and only some
+     * browsers will let it. So this is a request, the hub obeys it if it can,
+     * and a hub that cannot says so on screen instead.
+     *
+     * Every hub hears it, not one chosen window. Telling them apart needed an
+     * id in the address bar, and that made the link different every time —
+     * which cost the pinnable link this release exists for, to protect a tab
+     * he was happy to have closed.
+     *
+     * The count is logged because the failure is otherwise invisible from
+     * either side: `announce` only reaches hubs that are attached *now*, so a
+     * window still starting up when he says goodbye never hears it and stays
+     * open forever, looking exactly like a page that ignored the request.
+     *
+     * Forgetting the window matters as much as asking it to go, or `openedAt`
+     * would suppress the next one for twenty seconds after the tab it was
+     * guarding has gone.
+     */
+    const hideHer = () => {
+      if (!WAKE_CLOSES_HUB) return;
+      console.log(`  [90m(closing the hub; ${server.attached()} attached)[0m`);
+      server.announce({ type: "dismissed" });
+      openedAt = 0;
+    };
 
     const listener = startWakeListener({
       device,
@@ -253,18 +357,28 @@ async function main() {
       words: WAKE_WORDS,
       followUpMs: WAKE_FOLLOWUP_MS,
       followUps: WAKE_FOLLOWUPS,
-      segment: { marginDb: WAKE_MARGIN_DB, maxMs: WAKE_MAX_MS, floorMax: WAKE_FLOOR_MAX },
-      // No prior, because nobody has promised that anyone spoke. A decoder
-      // primed with her name is a decoder that writes her name when guessing,
-      // and today it did: "For a second, Kokoro" came out of a quiet room with
-      // Kokoro sitting second in the vocabulary. See UNPROMPTED.
-      hear: (pcm) => ears.hear(pcm, UNPROMPTED),
+      segment: {
+        marginDb: WAKE_MARGIN_DB,
+        maxMs: WAKE_MAX_MS,
+        floorMax: WAKE_FLOOR_MAX,
+        preRollMs: WAKE_PREROLL_MS,
+      },
+      // No prior by default, because nobody has promised that anyone spoke. A
+      // decoder primed with her name is a decoder that writes her name when
+      // guessing, and one did: "For a second, Kokoro" came out of a quiet room
+      // with Kokoro sitting second in the vocabulary. See UNPROMPTED.
+      //
+      // The other side of that trade is a microphone whose real "Vela" never
+      // survives base.en, which is what VELA_WAKE_VOCABULARY is for.
+      hear: (pcm) => ears.hear(pcm, wakePrior(WAKE_VOCABULARY)),
 
       onCommand: (text, woke) => {
         const how = woke.followUp ? "follow-up" : woke.word;
         console.log(`  \x1b[36myou ›\x1b[0m \x1b[90m(${how})\x1b[0m ${text}`);
         listener.hold();
         answering = true;
+        cutTurn = false;
+        showHer();
         // The hub plays what the core says. This reply is already going to be
         // said out loud in the room, so tell it to stay quiet for this one.
         server.announce({ type: "aloud", value: true });
@@ -275,20 +389,21 @@ async function main() {
       // would put a second and a half between the name and the reply.
       onDismiss: () => {
         console.log(`  \x1b[90m(session closed)\x1b[0m`);
+        hideHer();
         listener.hold();
-        voice.say(WAKE_BYE);
+        if (speakingAloud) voice.say(WAKE_BYE);
         void Promise.resolve(speaker.drain?.())
           .catch(() => {})
-          .then(() => listener.resume());
+          .then(() => listenAgain());
       },
 
       onName: (word) => {
         console.log(`  \x1b[36myou ›\x1b[0m \x1b[90m(${word})\x1b[0m`);
         listener.hold();
-        voice.say(WAKE_ACK);
+        if (speakingAloud) voice.say(WAKE_ACK);
         void Promise.resolve(speaker.drain?.())
           .catch(() => {})
-          .then(() => listener.resume());
+          .then(() => listenAgain());
       },
 
       onCaptured: ({ ms, level }) => {
@@ -319,6 +434,49 @@ async function main() {
      */
     ears.warm();
     mouth.warm();
+
+    /**
+     * From here the hub is the controls for this room, not a second one.
+     *
+     * Published only once the microphone is actually capturing, because the
+     * hub draws its buttons from this: offering a mute for a microphone that
+     * never opened is the broken control the smaller face exists to avoid.
+     */
+    room = {
+      hearing: () => hearing,
+      setHearing: (on) => {
+        if (on === hearing) return;
+        hearing = on;
+        // Never un-mute into the middle of her own sentence: she is holding
+        // the microphone so as not to transcribe herself, and finish() will
+        // call listenAgain when she stops.
+        if (!on) listener.hold();
+        else if (!answering) listener.resume();
+        console.log(`  [90m(${on ? "listening" : "muted"})[0m`);
+      },
+      speaking: () => speakingAloud,
+      setSpeaking: (on) => {
+        if (on === speakingAloud) return;
+        speakingAloud = on;
+        // Drop what has not been spoken yet. flush() would do the opposite —
+        // it means "end of turn, say the rest" — and muting her by saying the
+        // remainder out loud is the joke version of this feature. The sentence
+        // already handed to the player still finishes; stopping that needs
+        // speaker.stop(), which is teardown and does not come back.
+        if (!on) voice.stop();
+        console.log(`  [90m(${on ? "out loud" : "silent"})[0m`);
+      },
+      cut: () => {
+        // Three things, and all three are needed. The flag stops the rest of
+        // the reply being spoken as it streams in, voice.stop() drops the
+        // half-sentence already buffered, and speaker.cut() ends the one
+        // actually sounding — which is the only one he can hear, and so the
+        // only one that makes this feel like interrupting a person.
+        cutTurn = true;
+        voice.stop();
+        speaker.cut?.();
+      },
+    };
 
     console.log(`  Wake word on (${device}). Say "${NAME}".`);
     stopListening = () => {

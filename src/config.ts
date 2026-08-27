@@ -264,6 +264,32 @@ export const LISTEN_ON = switchedOn(process.env.VELA_LISTEN, true);
 export const OPEN_HUB = switchedOn(process.env.VELA_OPEN, false);
 
 /**
+ * Open her hub when the wake word starts a conversation.
+ *
+ * Being answered by a voice from a laptop with nothing on screen is the
+ * complaint this exists for: he cannot see what she is doing, what she is
+ * working from, or how to stop her. A hub opened at the moment she is
+ * addressed is all three.
+ *
+ * Only when nothing is attached already. A window per turn would be worse
+ * than no window, and the tab he left open yesterday is the one he wants.
+ */
+export const WAKE_OPENS_HUB = switchedOn(process.env.VELA_WAKE_OPEN, true);
+
+/**
+ * Close that hub again when he says they are finished.
+ *
+ * The other half of WAKE_OPENS_HUB. A window she opens on every conversation
+ * and never closes is a row of dead tabs by the evening, each one a session
+ * that ended hours ago still showing its last reply.
+ *
+ * It only ever closes the tab she opened herself, and only the one she opened
+ * last — a hub he opened, or pinned, or has been reading all day is his, and
+ * a dismissal is not a reason to take it off his screen. See `showHer`.
+ */
+export const WAKE_CLOSES_HUB = switchedOn(process.env.VELA_WAKE_CLOSE, true);
+
+/**
  * A fixed address, so her hub can be pinned.
  *
  * A random port and a fresh token per start is right for something you launch
@@ -365,6 +391,22 @@ export const WHISPER_PYTHON =
 export const WAKE_ON = switchedOn(process.env.VELA_WAKE, true);
 
 /**
+ * The decoder's prior for the wake word, if this microphone needs one.
+ *
+ * Empty is UNPROMPTED, and it is the right default: a decoder primed with her
+ * name writes her name when it is guessing, which is how "For a second,
+ * Kokoro" came out of a quiet room.
+ *
+ * No prior has its own failure, and base.en pays it — the name was never in
+ * its vocabulary, so a real "Vela" comes back as panel, Madam, Zeno, while the
+ * ordinary English around it decodes cleanly. Her name alone here tells the
+ * decoder the word exists without offering it a list to reach for, and the
+ * strict bar still throws out what it invents. Watch the debug log after
+ * setting it: this trades a wake she misses for a wake she imagines.
+ */
+export const WAKE_VOCABULARY = process.env.VELA_WAKE_VOCABULARY ?? "";
+
+/**
  * What she answers to. Comma-separated, and it is a list rather than a word
  * because whisper hears the name differently depending on the vowel; the
  * defaults live in wake.ts next to the reason for each one.
@@ -411,6 +453,29 @@ export const WAKE_MARGIN_DB = Number(process.env.VELA_WAKE_MARGIN ?? "8");
 
 /** Longest single utterance she will send to whisper, in milliseconds. */
 export const WAKE_MAX_MS = Number(process.env.VELA_WAKE_MAX ?? "15000");
+
+/**
+ * How much of the room is kept in front of the frame that opened the gate.
+ *
+ * Not the same knob as the margin, and it fixes a failure the margin cannot.
+ * A sentence starts softly — "Vela, are you there" begins on a fricative and a
+ * schwa, quieter than anything after it — so the gate routinely trips a word
+ * late, on the first stressed vowel it can hear. What saves the name is not
+ * the gate opening sooner but the recording already having it.
+ *
+ * The number is smaller than it reads. The pre-roll buffer is the last of
+ * everything, so it already holds the frames that tripped the gate: at 600ms
+ * with a 100ms frame and two frames to open, the audio kept *before* the
+ * trigger was 400ms, and "Vela" takes about 600ms to say. That was the whole
+ * bug — she was transcribing "are you there?" and quite correctly not
+ * answering it.
+ *
+ * Costs nothing in false wakes, which is what makes it the first thing to
+ * reach for: it never opens the gate, it only lengthens what a gate that
+ * already opened hands over. It costs a little room tone in front of every
+ * utterance, which whisper reads as nothing.
+ */
+export const WAKE_PREROLL_MS = Number(process.env.VELA_WAKE_PREROLL ?? "1000");
 
 /**
  * The loudest the gate may believe the room is, in dBFS.
