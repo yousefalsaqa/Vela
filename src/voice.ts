@@ -824,11 +824,59 @@ export function synthSpeaker(opts: {
   };
 }
 
+/** The tag she wraps the spoken line in. Stripped everywhere it is displayed. */
+export const SAY_OPEN = "<say>";
+export const SAY_CLOSE = "</say>";
+
+/**
+ * What of a reply is meant for the ear.
+ *
+ * The screen and the voice used to be the same stream, which is why every rule
+ * about being brief out loud was also a rule about writing less down — and the
+ * two wants are not the same. A reply now opens with the sentence she would
+ * say if he could only hear one, and the detail underneath it is for reading.
+ *
+ * Called on the whole reply so far, on every chunk, so it has to be monotonic:
+ * what it returned last time must stay a prefix of what it returns now, or the
+ * player would be handed text it has already said. The only thing that can
+ * un-say itself is a tag arriving one character at a time, which is why an
+ * unterminated one at the very end is trimmed rather than spoken.
+ */
+export function spokenOf(text: string): string {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf(SAY_OPEN, at);
+    if (open === -1) break;
+    const from = open + SAY_OPEN.length;
+    const close = text.indexOf(SAY_CLOSE, from);
+    if (close === -1) {
+      // Still being written. A half-arrived "</say" is markup, not speech.
+      out += text.slice(from).replace(/<[^>]*$/, "");
+      break;
+    }
+    // The separator goes after the content, so everything before it is
+    // untouched and the prefix stays stable.
+    out += text.slice(from, close) + "\n\n";
+    at = close + SAY_CLOSE.length;
+  }
+  return out;
+}
+
+/** The same reply with the tags taken out, which is what a screen shows. */
+export function withoutSay(text: string): string {
+  return text.split(SAY_OPEN).join("").split(SAY_CLOSE).join("");
+}
+
 export function createVoice(
   speak: Speaker,
   pronounce: [RegExp, string][] = PRONOUNCE_RESPELL,
 ): Voice {
   let buffer = "";
+  /** The whole reply as written, tags and all, so spokenOf can be re-run on it. */
+  let written = "";
+  /** How much of what spokenOf returned has already been handed over. */
+  let taken = 0;
   /**
    * True until something has actually been spoken this turn. Only the opening
    * is allowed to break at a clause: once the player has samples the ear is
@@ -845,7 +893,12 @@ export function createVoice(
 
   return {
     push(chunk: string) {
-      buffer += chunk;
+      written += chunk;
+      const spoken = spokenOf(written);
+      // Only what is new. spokenOf is monotonic, so this is always a suffix.
+      if (spoken.length <= taken) return;
+      buffer += spoken.slice(taken);
+      taken = spoken.length;
       const { ready, rest } = sentences(buffer, false, opening);
       buffer = rest;
       // A piece that turned out to be nothing but markup was never spoken, so
@@ -853,8 +906,26 @@ export function createVoice(
       for (const s of ready) if (emit(s)) opening = false;
     },
     flush() {
+      const spoken = spokenOf(written);
+      if (spoken.length > taken) {
+        buffer += spoken.slice(taken);
+        taken = spoken.length;
+      }
+      /**
+       * She wrote a whole reply and never marked a line to say.
+       *
+       * Silence is the wrong failure: from the other side of the room a turn
+       * that answers nothing is indistinguishable from one she never heard.
+       * The first sentence of what she wrote is the honest fallback, and it is
+       * bounded at one sentence, which is the rule she was given anyway.
+       */
+      if (opening && !buffer.trim() && written.trim()) {
+        buffer = sentences(withoutSay(written), true).ready[0] ?? "";
+      }
       const { ready } = sentences(buffer, true);
       buffer = "";
+      written = "";
+      taken = 0;
       for (const s of ready) emit(s);
       // The turn is over, so the next one opens from silence and is eager again.
       opening = true;
@@ -864,6 +935,8 @@ export function createVoice(
     },
     stop() {
       buffer = "";
+      written = "";
+      taken = 0;
       opening = true;
     },
   };

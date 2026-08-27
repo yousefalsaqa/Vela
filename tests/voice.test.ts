@@ -8,6 +8,8 @@ import {
   sentences,
   clauses,
   createVoice,
+  spokenOf,
+  withoutSay,
   pcmFromWav,
   pcmPlayer,
   kokoroSpeaker,
@@ -197,6 +199,84 @@ describe("sentences", () => {
       ready: [],
       rest: "I checked the",
     });
+  });
+});
+
+describe("spokenOf", () => {
+  test("only what is inside the tags is meant for the ear", () => {
+    assert.equal(
+      spokenOf("<say>Three new ones.</say> CMAPSS is a turbofan project.").trim(),
+      "Three new ones.",
+    );
+  });
+
+  test("an unclosed tag is already speakable, so she starts talking before she stops writing", () => {
+    // The whole point of putting it first. Waiting for the tag to close would
+    // cost the opening the eager-clause work exists to buy back.
+    assert.equal(spokenOf("<say>Three new"), "Three new");
+  });
+
+  test("a half-arrived closing tag is markup, not something to say", () => {
+    // This is the one that matters. push() hands over whatever is new since
+    // last time, so anything that appears and then disappears has already
+    // been said and cannot be taken back.
+    assert.equal(spokenOf("<say>Three new ones.</sa"), "Three new ones.");
+  });
+
+  test("what it returns can only ever grow, one character of arrival at a time", () => {
+    const whole = "<say>Three new ones.</say> CMAPSS is a turbofan project.";
+    let last = "";
+    for (let i = 0; i <= whole.length; i++) {
+      const now = spokenOf(whole.slice(0, i));
+      assert.ok(
+        now.startsWith(last),
+        `at ${i} chars "${now}" is not a continuation of "${last}" — she would repeat or swallow words`,
+      );
+      last = now;
+    }
+  });
+
+  test("a reply with no tags says nothing, which is what leaves the fallback to decide", () => {
+    assert.equal(spokenOf("I checked the desktop. Three new ones."), "");
+  });
+});
+
+describe("withoutSay", () => {
+  test("the marks are for the room, so a screen never shows them", () => {
+    assert.equal(withoutSay("<say>Done.</say> The long version."), "Done. The long version.");
+  });
+});
+
+describe("createVoice, splitting what she says from what she writes", () => {
+  const heard = () => {
+    const said: string[] = [];
+    return { said, voice: createVoice((t) => said.push(t)) };
+  };
+
+  test("the detail underneath the line is written, not spoken", () => {
+    const h = heard();
+    h.voice.push("<say>Three new ones.</say> CMAPSS is an end-to-end turbofan");
+    h.voice.push(" prognostics project on the NASA dataset. Then tactical-lab.");
+    h.voice.flush();
+    assert.deepEqual(h.said, ["Three new ones."]);
+  });
+
+  test("she forgot the tag, so she says one sentence rather than nothing", () => {
+    // Silence is the wrong failure here: from across the room a turn that
+    // answers nothing is indistinguishable from one she never heard.
+    const h = heard();
+    h.voice.push("I checked the desktop. There are three new projects. CMAPSS is the newest.");
+    h.voice.flush();
+    assert.deepEqual(h.said, ["I checked the desktop."]);
+  });
+
+  test("a turn that fell back does not leak into the next one", () => {
+    const h = heard();
+    h.voice.push("No tag at all here.");
+    h.voice.flush();
+    h.voice.push("<say>Done.</say> And the rest.");
+    h.voice.flush();
+    assert.deepEqual(h.said, ["No tag at all here.", "Done."]);
   });
 });
 
@@ -886,9 +966,13 @@ describe("createVoice", () => {
     return { spoken, voice: createVoice((t) => spoken.push(t)) };
   };
 
+  /* These push tagged text because only tagged text is spoken now. The claims
+     are unchanged — streaming, eagerness, cleanup — but an untagged reply no
+     longer reaches the ear as it streams, so testing them on one would be
+     testing the fallback and calling it something else. */
   test("speaks each sentence as it streams, not at the end", () => {
     const { spoken, voice } = harness();
-    voice.push("Renamed it. ");
+    voice.push("<say>Renamed it. ");
     assert.deepEqual(spoken, ["Renamed it."], "waiting for the full reply adds latency");
     voice.push("Tests pass. ");
     assert.deepEqual(spoken, ["Renamed it.", "Tests pass."]);
@@ -905,7 +989,7 @@ describe("createVoice", () => {
 
   test("cleans what it speaks", () => {
     const { spoken, voice } = harness();
-    voice.push("Edit `src/core.ts` now. ");
+    voice.push("<say>Edit `src/core.ts` now. ");
     assert.deepEqual(spoken, ["Edit src/core.ts now."]);
   });
 
@@ -942,7 +1026,7 @@ describe("createVoice", () => {
   test("a name is said the way he says it", () => {
     const spoken: string[] = [];
     const voice = createVoice((t) => spoken.push(t), [[/\bYousef\b/g, "YOO-sef"]]);
-    voice.push("Morning, Yousef. ");
+    voice.push("<say>Morning, Yousef. ");
     assert.match(spoken[0] ?? "", /YOO-sef/, "every English voice reads it wrong by default");
   });
 });
@@ -973,7 +1057,7 @@ describe("the opening clause", () => {
   test("only the first piece of a turn is eager", () => {
     const said: string[] = [];
     const voice = createVoice((t) => said.push(t), []);
-    voice.push("Some of that is not me, it is the pipe and ");
+    voice.push("<say>Some of that is not me, it is the pipe and ");
     assert.deepEqual(said, ["Some of that is not me,"], "the opener breaks early");
     voice.push("the pipe does not care, it just renders and ");
     assert.deepEqual(said, ["Some of that is not me,"], "the rest waits for a full stop");
@@ -982,10 +1066,10 @@ describe("the opening clause", () => {
   test("a new turn opens from silence and is eager again", () => {
     const said: string[] = [];
     const voice = createVoice((t) => said.push(t), []);
-    voice.push("Some of that is not me, it is the pipe.");
+    voice.push("<say>Some of that is not me, it is the pipe.");
     voice.flush();
     said.length = 0;
-    voice.push("Another long opening line here, and then some more ");
+    voice.push("<say>Another long opening line here, and then some more ");
     assert.deepEqual(said, ["Another long opening line here,"]);
   });
 });

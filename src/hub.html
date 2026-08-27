@@ -1198,7 +1198,11 @@ function settledUpto(raw) {
 
 /** For the eye: the markers go, everything they were wrapped around stays. */
 function forReading(text) {
+  // Her spoken line is marked in the text she writes; the marks are for the
+  // room, not for him.
   return text
+    .split("<say>").join("")
+    .split("</say>").join("")
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
