@@ -335,7 +335,14 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
     // the reload arrives bare and is turned away before any of it can run.
     if (req.method === "GET" && (path === "/" || path === "/hub")) {
       try {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        // Never cached. There is no build step and no hash in the name, so a
+        // cached copy is indistinguishable from the current one and the tab he
+        // pinned goes on running whichever version it first met — which looked
+        // exactly like a feature having been written and not working.
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
         res.end(readFileSync(resolve(here, "hub.html"), "utf8"));
       } catch {
         res.writeHead(500, { "content-type": "application/json" });

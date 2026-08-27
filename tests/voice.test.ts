@@ -315,6 +315,37 @@ describe("pcmPlayer", () => {
     assert.doesNotThrow(() => pcmPlayer({ spawn: fake.spawn }).stop());
   });
 
+  test("must not open a second device while the last turn is still playing out", async () => {
+    // drain() gives up the player the moment it closes the pipe, but the audio
+    // already handed over goes on sounding for as long as the tail is. A write
+    // arriving there used to start its own player, and the two then sounded at
+    // once — which is what two live ffplays in the process list turned out to
+    // be, and what "she reads over herself" sounds like from the desk.
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ spawn: fake.spawn });
+    await player.write(samples);
+    const draining = player.drain(1_000);
+    const next = player.write(samples);
+    assert.equal(fake.spawned.length, 1, "the tail of the last turn is still sounding");
+    await draining;
+    await next;
+    assert.equal(fake.spawned.length, 2, "and once it has finished, the next turn opens its own");
+  });
+
+  test("cutting does not leave the next sentence waiting on a player it already killed", async () => {
+    // The wait exists for a tail. Cutting is the one case with no tail, so
+    // carrying the wait over would make being interrupted cost her the start
+    // of her next answer.
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ spawn: fake.spawn });
+    await player.write(samples);
+    const draining = player.drain(1_000);
+    player.cut();
+    await player.write(samples);
+    assert.equal(fake.spawned.length, 2);
+    await draining;
+  });
+
   test("cutting kills the player, rather than letting the sentence it holds finish", () => {
     // The pipe already holds a whole sentence. Ending it politely would play
     // that sentence out, which from the other side of the desk is not being
@@ -1067,13 +1098,17 @@ describe("the beat between sentences", () => {
     assert.equal(fake.last().proc.written.length, 300);
   });
 
-  test("a new turn starts a new player, so it opens with no beat again", () => {
+  test("a new turn starts a new player, so it opens with no beat again", async () => {
     const fake = fakeSpawner();
     const player = pcmPlayer({ gapMs: 150, spawn: fake.spawn });
-    player.write(Buffer.alloc(100, 7));
-    player.write(Buffer.alloc(100, 7));
-    void player.drain(10);
-    player.write(Buffer.alloc(100, 7));
+    await player.write(Buffer.alloc(100, 7));
+    await player.write(Buffer.alloc(100, 7));
+    // Awaited, where this used to write straight over an un-awaited drain and
+    // assert that the second player was already open. That was the overlap:
+    // the claim it was making — a new turn opens clean — is still true, but it
+    // opens once the drained one has finished sounding, not beside it.
+    await player.drain(10);
+    await player.write(Buffer.alloc(100, 7));
     assert.equal(fake.spawned.length, 2, "the drained player has already ended");
     assert.equal(fake.last().proc.written.length, 100, "and the new one opens clean");
   });

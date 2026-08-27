@@ -408,8 +408,14 @@ export function pcmFromWav(buffer: Buffer): Buffer | null {
 export const RATE = 24_000;
 
 export interface PcmPlayer {
-  /** Queue raw signed 16-bit mono samples. Returns as soon as they're handed over. */
-  write: (pcm: Buffer, gapMs?: number) => void;
+  /**
+   * Queue raw signed 16-bit mono samples.
+   *
+   * Resolves as soon as they are handed over, except while a previous turn is
+   * still playing out, where it waits for the device rather than opening a
+   * second one over the top. Callers that write in order must await it.
+   */
+  write: (pcm: Buffer, gapMs?: number) => Promise<void>;
   /** Close the stream and wait for the tail to finish playing. */
   drain: (timeoutMs?: number) => Promise<void>;
   /** Kill what is sounding now; the next write starts a fresh player. */
@@ -489,6 +495,17 @@ export function pcmPlayer(opts: {
   let proc: ChildProcess | null = null;
   let closed: Promise<void> = Promise.resolve();
   let stopped = false;
+  /**
+   * Set while a drain is waiting for the tail of the last turn to finish.
+   *
+   * drain() gives up `proc` the moment it closes the pipe, but the audio it
+   * already handed over goes on sounding for as long as the tail is — seconds,
+   * for a paragraph. A write arriving in that window used to find no player
+   * and start one, and the two then played at once: one of her reading over
+   * the other. Waiting is right rather than dropping, because what arrives
+   * there is the next thing she has to say.
+   */
+  let closing: Promise<void> | null = null;
 
   const start = (): ChildProcess => {
     const p = spawn(
@@ -517,8 +534,10 @@ export function pcmPlayer(opts: {
   };
 
   return {
-    write(pcm: Buffer, thisGap?: number) {
+    async write(pcm: Buffer, thisGap?: number) {
       if (stopped || !pcm.length) return;
+      if (closing) await closing;
+      if (stopped) return;
       // The player runs for the length of a turn, so a pipe that is already
       // open means this is not her first sentence and the one before it ended
       // flush against this one.
@@ -533,13 +552,23 @@ export function pcmPlayer(opts: {
       const p = proc;
       if (!p) return;
       // Closing the pipe is what tells the player it has reached the end, so
-      // the next thing said gets a fresh one.
+      // the next thing said gets a fresh one. Published as `closing` for the
+      // length of the wait, so a write that lands inside it queues behind the
+      // tail instead of talking over it.
       proc = null;
-      p.stdin?.end();
-      await Promise.race([
-        closed,
-        new Promise((r) => setTimeout(r, timeoutMs).unref?.()),
-      ]);
+      const wait = (async () => {
+        p.stdin?.end();
+        await Promise.race([
+          closed,
+          new Promise((r) => setTimeout(r, timeoutMs).unref?.()),
+        ]);
+      })();
+      closing = wait;
+      try {
+        await wait;
+      } finally {
+        if (closing === wait) closing = null;
+      }
     },
 
     /**
@@ -555,6 +584,10 @@ export function pcmPlayer(opts: {
     cut() {
       const p = proc;
       proc = null;
+      // Nothing to queue behind: the tail this would have waited for is the
+      // audio being ended. Leaving it set would make the next sentence wait
+      // on a drain whose player is already dead.
+      closing = null;
       p?.kill();
     },
 
@@ -659,7 +692,7 @@ export function kokoroSpeaker(opts: {
     // player holds them, so synthesis runs ahead of what's being heard.
     const pcm = pcmFromWav(readFileSync(file));
     if (pcm) {
-      player.write(pcm, gapFor(text, opts.gapMs ?? 0));
+      await player.write(pcm, gapFor(text, opts.gapMs ?? 0));
       opts.onSpoke?.();
     } else complain("Kokoro wrote a file that isn't a wav");
 
