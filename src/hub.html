@@ -499,6 +499,11 @@ body[data-typing="on"] .dock::before { color: var(--cyan); }
 .key svg { width: 1rem; height: 1rem; fill: currentColor; }
 .key[aria-pressed="true"] { color: var(--gold); }
 .key.hot { color: var(--ink); }
+/* Only ever on screen while there is something to stop, so it reads as a state
+   of hers rather than a control that happens to be available. Gold because
+   that is already what her speaking looks like here. */
+.key.stop { color: var(--gold); }
+.key.stop:hover { color: var(--ink); }
 .send {
   width: auto;
   padding: 0 .1rem;
@@ -696,6 +701,9 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
     <button type="button" class="key" id="ear" title="Hear her replies" aria-label="Hear her replies" aria-pressed="false" hidden>
       <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9H4Zm13.5 3A4.5 4.5 0 0 0 15 8v8a4.5 4.5 0 0 0 2.5-4Z"/></svg>
     </button>
+    <button type="button" class="key stop" id="stop" title="Enough (Esc)" aria-label="Stop her" hidden>
+      <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
   </form>
 </div>
 
@@ -727,6 +735,7 @@ const json = Object.assign({ "content-type": "application/json" }, auth);
 const $ = (id) => document.getElementById(id);
 const thread = $("thread"), stateEl = $("state"), doingEl = $("doing"), lockedEl = $("locked");
 const dock = $("dock"), text = $("text"), micKey = $("mic"), earKey = $("ear"), sendKey = $("send");
+const stopKey = $("stop");
 const stage = $("stage"), stageTitle = $("stageTitle"), stageNote = $("stageNote");
 const stageFrame = $("stageFrame"), stageShut = $("stageShut"), probe = $("probe");
 const works = $("works"), worksPanel = $("worksPanel"), worksCount = $("worksCount"), worksKeep = $("worksKeep");
@@ -1404,6 +1413,18 @@ addEventListener("message", (e) => {
    Her voice: the same Kokoro the terminal uses
    ════════════════════════════════════════════════════════════════════════ */
 let speaking = false, canSpeak = false, speakingNow = false;
+
+/**
+ * Show the stop key exactly while she has something to be stopped saying.
+ *
+ * Both voices count: `aloud` is her speaking in the room, `speakingNow` is
+ * this page playing her. Derived rather than set at each site, because the two
+ * overlap at the edges of a turn and a control that lingers after she has
+ * finished is one that does nothing when pressed.
+ */
+function drawStop() {
+  stopKey.hidden = !(aloud || speakingNow);
+}
 /* She is saying this one out loud in the room already. The service tells us so,
    because a tab has no way of knowing there is a microphone in front of it, and
    two of her talking at once is worse than neither. Cleared on reconnect: a
@@ -1647,6 +1668,7 @@ async function drainAudio() {
           } catch { analyser = null; }
         }
         speakingNow = true;
+        drawStop();
         setState("speaking", "speaking");
         const stopSweep = sweep(a, item);
         let done = false;
@@ -1669,6 +1691,7 @@ async function drainAudio() {
   }
   playing = false;
   speakingNow = false;
+  drawStop();
   analyser = null;
   // Only when she was the last thing on screen: a barge-in has already moved
   // the state to listening, and finishing here would stamp idle back over it.
@@ -1695,6 +1718,7 @@ function hush(cut) {
   for (const el of document.querySelectorAll(".w.saying")) el.classList.remove("saying");
   playing = false;
   speakingNow = false;
+  drawStop();
   analyser = null;
 }
 
@@ -1897,12 +1921,13 @@ function listen() {
     // A service that restarted is not speaking into the room any more, whatever
     // it was doing when the stream went. Never inherit its silence.
     aloud = false;
+    drawStop();
     if (!open && !speakingNow) setState("idle", "with you");
   };
   events.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
-    if (ev.type === "aloud") aloud = Boolean(ev.value);
+    if (ev.type === "aloud") { aloud = Boolean(ev.value); drawStop(); }
     else if (ev.type === "activity") tool(ev.lines || []);
     else if (ev.type === "delta") delta(ev.text || "");
     else if (ev.type === "result") done(ev.ms, ev.text);
@@ -1988,16 +2013,22 @@ dock.addEventListener("submit", (e) => {
    for mid-sentence. This is: the key that means stop everywhere else, meaning
    stop here, about this reply only. Outside a room it is the same gesture
    against the page's own voice, which is what hush() already was. */
+function enough() {
+  if (!inRoom) { hush(); return; }
+  // Locally first, so the head goes out on the press rather than on the round
+  // trip: she is already quiet by the time the response lands.
+  roomHead();
+  roomSaid.length = 0;
+  setRoom({ stop: true });
+}
+
+stopKey.addEventListener("click", enough);
+
 addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const el = document.activeElement;
   if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return;
-  if (!inRoom) { hush(); return; }
-  // Locally first, so the head goes out on the keypress rather than on the
-  // round trip: she is already quiet by the time the response lands.
-  roomHead();
-  roomSaid.length = 0;
-  setRoom({ stop: true });
+  enough();
 });
 
 addEventListener("keydown", (e) => {
@@ -2078,6 +2109,7 @@ if (!KEY) {
          existed, so the state comes from the handshake instead. Without it the
          speaker button would talk over her. */
       aloud = Boolean(h.aloud);
+      drawStop();
       /* In a room, both buttons work whatever this service can do for a
          browser: they are the room's switches, not this page's. */
       inRoom = Boolean(h.room);
