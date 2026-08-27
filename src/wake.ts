@@ -89,6 +89,13 @@ export const DISMISSALS = [
   "cancel",
   "stop",
   "you can go now",
+  /**
+   * What base.en writes for "you can go now". The "w" at the end of the phrase
+   * is quiet, and it heard "go on" twice running — and then the model answered
+   * "Alright" to what was him leaving. Like the name's spellings, the phrase
+   * has to be listed the way she hears it, not the way he says it.
+   */
+  "you can go on",
   "goodbye",
   "bye",
   "good night",
@@ -557,7 +564,13 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
 
     // Him letting her go ends it now, rather than leaving her listening
     // through the timer he has just made unnecessary.
-    if (isDismissal(said, opts.dismissals, opts.words)) {
+    //
+    // Judged on the sentence whole, not on `rest`. isDismissal already knows
+    // to step over a lead-in and her name, whereas afterAddress is guessing at
+    // where a name it cannot see was — and inside the detection window "okay,
+    // you can go now" carries no name, so the guess takes "you" and the phrase
+    // no longer matches.
+    if (isDismissal(text, opts.dismissals, opts.words)) {
       followUntil = 0;
       followLeft = 0;
       opts.onDismiss?.();

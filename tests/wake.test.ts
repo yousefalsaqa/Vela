@@ -202,7 +202,9 @@ describe("matchWake requiring a lead-in", () => {
 
 describe("isDismissal", () => {
   test("the phrase he actually uses to let her go", () => {
-    for (const said of ["you can go now", "okay you can go now"]) {
+    // "go on" is what whisper wrote down for it, both times it was tried. The
+    // list has to carry the transcript, not the sentence.
+    for (const said of ["you can go now", "okay you can go now", "Okay, you can go on"]) {
       assert.equal(isDismissal(said), true, `"${said}" is him finishing`);
     }
   });
@@ -766,6 +768,25 @@ describe("startWakeListener", () => {
       1,
       "a session he has closed must not still be open, or the timer is the only way out",
     );
+    wake.stop();
+  });
+
+  test("letting her go inside the detection window still lets her go", async () => {
+    // "Hey Vela" — "Yes?" — "okay, you can go now", all inside the six seconds
+    // a detection stays good for. The model says he addressed her, whisper
+    // wrote no name, and afterAddress guesses that "okay, you" was the name.
+    // Matched on what was left, the dismissal missed and she answered it as a
+    // question. It has to be matched on what he said.
+    const { wake, commands, names, byes, utterance } = listener({
+      transcripts: ["Hey Vela.", "Okay, you can go now."],
+      followUpMs: 30_000,
+      detector: { firedSince: () => true },
+    });
+    await utterance();
+    await until(() => names.length === 1, "her name to be answered");
+    await utterance();
+    await until(() => byes.length === 1, "the goodbye");
+    assert.deepEqual(commands, [], "a goodbye is not a question for the model");
     wake.stop();
   });
 
