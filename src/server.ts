@@ -116,6 +116,13 @@ export interface ServeOptions {
    */
   aloud?: () => boolean;
   /**
+   * The last line she said that was not a turn, and when: "Yes?" to her
+   * name. The hub that name opened arrives after she has said it, so the
+   * announcement misses it and the handshake carries it instead. Recent only
+   * — see /health.
+   */
+  lastSaid?: () => { text: string; at: number } | null;
+  /**
    * The microphone and the speakers in the room she is actually in.
    *
    * The hub used to be a second pair of these: its own browser microphone, its
@@ -182,6 +189,14 @@ export interface RunningServer {
  * Phrased as an observation rather than a telling-off, because the useful
  * response is a shorter next answer, not an apology for the last one.
  */
+/**
+ * How long a canned line stays worth showing a hub that arrives late. The
+ * window the wake word gives a browser to open and attach is twenty seconds
+ * (see showHer); anything older than that is not the line this tab was
+ * opened for.
+ */
+export const SAID_FRESH_MS = 20_000;
+
 export const CUT_OFF =
   "[He interrupted you to say this, so he had heard enough. That last reply " +
   "was longer than it needed to be. Answer this one in one sentence.]";
@@ -410,6 +425,13 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
           // Not a capability but a fact about the room, and the one thing a
           // late-arriving hub cannot work out for itself. See ServeOptions.
           aloud: Boolean(opts.aloud?.()),
+          // What she said on being addressed, for the hub that address opened
+          // and that arrived after she said it. Recent only: a page reloaded
+          // an hour later is not owed this morning's "Yes?".
+          said: (() => {
+            const said = opts.lastSaid?.();
+            return said && Date.now() - said.at < SAID_FRESH_MS ? said.text : null;
+          })(),
           // Present means the hub draws controls for the room's microphone and
           // voice instead of offering a second set of its own. Absent means
           // there is no room, and the hub is the only Vela there is.

@@ -500,8 +500,45 @@ export const WAKE_FOLLOWUP_MS = Number(process.env.VELA_WAKE_FOLLOWUP ?? "30000"
  */
 export const WAKE_FOLLOWUPS = Number(process.env.VELA_WAKE_FOLLOWUPS ?? "6");
 
-/** What she says when he tells her they are finished. */
-export const WAKE_BYE = process.env.VELA_WAKE_BYE ?? "Okay.";
+/**
+ * Split a list he wrote as one variable: "Yes?|I'm here.|Go on."
+ *
+ * A bar rather than a comma, because the lines are sentences and a comma is
+ * something a sentence may contain. Unset or empty keeps the fallback: a
+ * variable set to nothing is not a request for her to say nothing.
+ */
+export function linesFrom(raw: string | undefined, fallback: string[]): string[] {
+  const lines = (raw ?? "")
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return lines.length ? lines : fallback;
+}
+
+/**
+ * One of them, and never the one before.
+ *
+ * The persona says why, under "When he is only checking you are there":
+ * answering the same way every time is the one thing nobody does. `roll` is a
+ * number in [0, 1), so a test can choose.
+ */
+export function oneOf(lines: string[], last = "", roll = Math.random()): string {
+  const fresh = lines.length > 1 ? lines.filter((line) => line !== last) : lines;
+  if (!fresh.length) return "";
+  return fresh[Math.min(fresh.length - 1, Math.max(0, Math.floor(roll * fresh.length)))];
+}
+
+/**
+ * What she says when he tells her they are finished. Several, for the same
+ * reason as WAKE_ACKS, and in the same register: an acknowledgement, not a
+ * farewell speech.
+ */
+export const WAKE_BYES = linesFrom(process.env.VELA_WAKE_BYE, [
+  "Okay.",
+  "Alright.",
+  "Sure.",
+  "Right.",
+]);
 
 /**
  * How much louder than the room a sound has to be before it is speech.
@@ -570,10 +607,24 @@ export const WHISPER_MIN_LOGPROB = Number(process.env.VELA_LOGPROB ?? "-1.0");
  *
  * Canned rather than a model turn on purpose. He has just said one word and is
  * waiting to hear whether she heard it; a second and a half of thinking to
- * produce "yes?" is the wrong trade, and a different acknowledgement every
- * time is worse than the same one.
+ * produce "yes?" is the wrong trade.
+ *
+ * Several, drawn at random and never the same twice running. This used to be
+ * one line on the grounds that a different acknowledgement every time was
+ * worse than the same one, and the persona below disagrees, and is right: the
+ * same word every time is the one thing that gives her away. The lines are
+ * the ones it sets out as the register — short, plain, said without looking
+ * up — so the canned answer and the model's answer sound like one person.
  */
-export const WAKE_ACK = process.env.VELA_WAKE_ACK ?? "Yes?";
+export const WAKE_ACKS = linesFrom(process.env.VELA_WAKE_ACK, [
+  "Yes?",
+  "I'm here.",
+  "Right here.",
+  "Go on.",
+  "Yeah?",
+  "Still here.",
+  "Listening.",
+]);
 
 /**
  * Print every transcript the wake word considered, and how loud it was.

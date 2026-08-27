@@ -55,7 +55,8 @@ import {
   WAKE_ON,
   WAKE_WORDS,
   WAKE_LEAD_REQUIRED,
-  WAKE_ACK,
+  WAKE_ACKS,
+  oneOf,
   WAKE_DEBUG,
   WAKE_MARGIN_DB,
   WAKE_MAX_MS,
@@ -64,7 +65,7 @@ import {
   WAKE_VOCABULARY,
   WAKE_FOLLOWUP_MS,
   WAKE_FOLLOWUPS,
-  WAKE_BYE,
+  WAKE_BYES,
   WAKE_DETECT,
   WAKE_MODEL,
   WAKE_PYTHON,
@@ -188,6 +189,14 @@ async function main() {
   let answering = false;
 
   /**
+   * The last line she said that was not a turn — "Yes?" to her name — and
+   * when. Same reason as `answering`: the hub her name opened is still
+   * starting when she says it, so the announcement misses it and the
+   * handshake has to carry it. See `sayLine`.
+   */
+  let lastSaid: { text: string; at: number } | null = null;
+
+  /**
    * The room's controls, once there is a room.
    *
    * Null until the wake word is listening, and null forever on a service that
@@ -201,6 +210,7 @@ async function main() {
     core,
     name: NAME,
     aloud: () => answering,
+    lastSaid: () => lastSaid,
     room: () => room,
     // A fixed port and a kept token are what make her hub pinnable.
     port: PORT,
@@ -391,6 +401,28 @@ async function main() {
       openedAt = 0;
     };
 
+    /**
+     * A canned line: her acknowledgement, her goodbye.
+     *
+     * Out loud, and on the screen. The hub only ever draws what comes down
+     * the event stream, and these never went down it — they are not model
+     * turns — so "Yes?" was a voice from a page showing nothing, which is the
+     * exact complaint showHer answers. Announced as a "say", the shape the
+     * hub already draws for a line she started herself.
+     *
+     * Never the same one twice running, which is the persona's rule for this
+     * and the reason the lines are lists. Announced even when she is muted:
+     * muting her stops the noise, not the writing.
+     */
+    let lastLine = "";
+    const sayLine = (lines: string[]) => {
+      const line = oneOf(lines, lastLine);
+      lastLine = line;
+      lastSaid = { text: line, at: Date.now() };
+      server.announce({ type: "say", text: line });
+      if (speakingAloud) voice.say(line);
+    };
+
     const listener = startWakeListener({
       device,
       detector,
@@ -432,9 +464,11 @@ async function main() {
       // would put a second and a half between the name and the reply.
       onDismiss: () => {
         console.log(`  \x1b[90m(session closed)\x1b[0m`);
-        hideHer();
         listener.hold();
-        if (speakingAloud) voice.say(WAKE_BYE);
+        // The goodbye before the window is asked to go, so a hub that cannot
+        // close itself is left showing it rather than the last reply.
+        sayLine(WAKE_BYES);
+        hideHer();
         void Promise.resolve(speaker.drain?.())
           .catch(() => {})
           .then(() => listenAgain());
@@ -447,7 +481,7 @@ async function main() {
         // opens a conversation. Without this she answers "yes" to a laptop
         // showing nothing, which is the exact thing showHer exists to prevent.
         showHer();
-        if (speakingAloud) voice.say(WAKE_ACK);
+        sayLine(WAKE_ACKS);
         void Promise.resolve(speaker.drain?.())
           .catch(() => {})
           .then(() => listenAgain());

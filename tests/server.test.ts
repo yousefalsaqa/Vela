@@ -957,6 +957,36 @@ describe("a hub that arrives mid-sentence", () => {
   });
 
   /**
+   * Her name opens a hub and she answers the name at once, so the tab that
+   * was opened for "Yes?" is the one tab that never saw it go by. Same shape
+   * as `aloud`: a fact carried on the handshake, not an event.
+   */
+  test("is handed the line she said to his name, if it was just now", async () => {
+    let said: { text: string; at: number } | null = null;
+    const quiet = mkdtempSync(join(tmpdir(), "vela-said-"));
+    const late = await serve({
+      core: fakeCore().core,
+      endpointFile: join(quiet, "server.json"),
+      lastSaid: () => said,
+    });
+    const ask = async () =>
+      (await fetch(`http://127.0.0.1:${late.endpoint.port}/health`, {
+        headers: { authorization: `Bearer ${late.endpoint.token}` },
+      }).then((r) => r.json())) as { said: string | null };
+    try {
+      assert.equal((await ask()).said, null, "nothing said is nothing to show");
+      said = { text: "Yes?", at: Date.now() };
+      assert.equal((await ask()).said, "Yes?");
+      // A page reloaded this afternoon is not owed this morning's answer.
+      said = { text: "Yes?", at: Date.now() - 60_000 };
+      assert.equal((await ask()).said, null, "an old line is not this tab's line");
+    } finally {
+      await late.close();
+      rmSync(quiet, { recursive: true, force: true });
+    }
+  });
+
+  /**
    * A service with no room to speak into — no Kokoro, so no wake word — must
    * still report something the hub can read, or the speaker button goes dead
    * on the one setup that depends on it.

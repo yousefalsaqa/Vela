@@ -826,7 +826,8 @@ browser's to say, or it would be said twice.
 | `VELA_WAKE_MARGIN` | `8` | dB over the room before a sound is speech. Lower hears more, including the keyboard |
 | `VELA_WAKE_FLOOR` | `-55` | The loudest the gate may believe the room is, in dBFS. Raise it after raising the microphone's input gain |
 | `VELA_WAKE_MAX` | `15000` | Longest single utterance sent to whisper |
-| `VELA_WAKE_ACK` | `Yes?` | What she says to her name alone |
+| `VELA_WAKE_ACK` | `Yes?\|I'm here.\|Right here.\|Go on.\|Yeah?\|Still here.\|Listening.` | What she says to her name alone. Several, split on `\|`, never the same twice running |
+| `VELA_WAKE_BYE` | `Okay.\|Alright.\|Sure.\|Right.` | What she says when he tells her they are finished. Same shape |
 | `VELA_WAKE_DEBUG` | `off` | Print every transcript with its level and whether it woke her |
 | `VELA_SILENCE` | `0.5` | How sure whisper may be that an utterance was silence before it is thrown away. Higher lets more through |
 | `VELA_LOGPROB` | `-1.0` | How badly whisper may doubt its own words. Lower lets more through |

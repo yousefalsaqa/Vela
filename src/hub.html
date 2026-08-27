@@ -2245,6 +2245,9 @@ if (!KEY) {
         roomHearing = Boolean(h.room.hearing);
         roomSpeaking = Boolean(h.room.speaking);
       }
+      /* Her name opened this tab, and she answered it before the tab could
+         hear her. After inRoom, so the line is drawn and not spoken twice. */
+      if (h.said) unbidden(h.said);
       // A control that cannot work is worse than no control.
       micKey.hidden = !inRoom && !canHear;
       earKey.hidden = !inRoom && !canSpeak;

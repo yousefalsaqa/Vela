@@ -8,6 +8,8 @@ import {
   parseSkillList,
   excludeSkills,
   switchedOn,
+  linesFrom,
+  oneOf,
   claudeBinaryDir,
   ensureClaudeOnPath,
   portFrom,
@@ -193,6 +195,48 @@ suite("the heartbeat's list", () => {
       ["agent-reach"],
       "a skill that isn't on this machine must not reach the tick",
     );
+  });
+});
+
+suite("linesFrom", () => {
+  test("unset keeps her own lines", () => {
+    assert.deepEqual(linesFrom(undefined, ["Yes?"]), ["Yes?"]);
+  });
+
+  test("splits on a bar, because the lines are sentences and may hold commas", () => {
+    assert.deepEqual(linesFrom("Yes? | Yes, go on. |Hm?", ["x"]), ["Yes?", "Yes, go on.", "Hm?"]);
+  });
+
+  test("set to nothing is not a request for silence", () => {
+    // The nearest thing to a typo here is an empty variable, and a Vela who
+    // answers her name with nothing looks broken rather than configured.
+    assert.deepEqual(linesFrom("", ["Yes?"]), ["Yes?"]);
+    assert.deepEqual(linesFrom(" | ", ["Yes?"]), ["Yes?"]);
+  });
+});
+
+suite("oneOf", () => {
+  const lines = ["Yes?", "I'm here.", "Go on."];
+
+  test("the roll picks, across the whole list", () => {
+    assert.equal(oneOf(lines, "", 0), "Yes?");
+    assert.equal(oneOf(lines, "", 0.999), "Go on.");
+  });
+
+  test("never the one before, whatever the roll", () => {
+    // The persona's one rule for this: answering the same way twice running
+    // is the thing nobody does. Every roll has to land somewhere else.
+    for (const roll of [0, 0.3, 0.6, 0.999]) {
+      assert.notEqual(oneOf(lines, "I'm here.", roll), "I'm here.", String(roll));
+    }
+  });
+
+  test("one line is allowed to repeat, because there is nothing else to say", () => {
+    assert.equal(oneOf(["Yes?"], "Yes?", 0.5), "Yes?");
+  });
+
+  test("no lines is nothing to say, not a throw", () => {
+    assert.equal(oneOf([], "", 0.5), "");
   });
 });
 
