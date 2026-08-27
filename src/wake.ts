@@ -1,5 +1,6 @@
 import { levelDb, openMic, SAMPLE_RATE, type Mic } from "./listen.js";
 import type { Spawner } from "./proc.js";
+import type { WakeDetector } from "./detect.js";
 
 /**
  * The wake word.
@@ -393,6 +394,13 @@ export interface WakeOptions {
    */
   followUpMs?: number;
   /**
+   * The wake word model, when there is one. Absent means the old path: her
+   * name looked for in whatever whisper wrote down.
+   */
+  detector?: WakeDetector | null;
+  /** How long one of its detections stays good for. See WAKE_DETECT_MS. */
+  detectMs?: number;
+  /**
    * Nameless turns one address is worth. See `arm` for why this is bounded.
    */
   followUps?: number;
@@ -413,8 +421,26 @@ export interface WakeOptions {
  * the part that owns a microphone, so it is the part that has to survive the
  * microphone going away.
  */
+/**
+ * The utterance with the address taken off the front.
+ *
+ * matchWake first, because when whisper did write the name down that is the
+ * exact cut. When it did not — which is the normal case for a name it has
+ * never seen — the model still heard the phrase, so something at the front of
+ * this sentence is it. "Hey <something>," is that shape, and taking it is
+ * better than handing the model's own trigger back to her as the question.
+ */
+export function afterAddress(text: string, words: string[]): string {
+  const woken = matchWake(text, words);
+  if (woken.heard) return woken.rest;
+  const lead = /^\s*(hey|hi|ok|okay)[\s,]+[a-z']+[\s,.!?-]+/i.exec(text);
+  return (lead ? text.slice(lead[0].length) : text).trim();
+}
+
 export function startWakeListener(opts: WakeOptions): WakeListener {
   const now = opts.now ?? Date.now;
+  const detector = opts.detector ?? null;
+  const detectMs = opts.detectMs ?? 6_000;
   const followUpMs = opts.followUpMs ?? 8_000;
   const followUps = opts.followUps ?? 6;
   const reopenMs = opts.reopenMs ?? [1_000, 2_000, 5_000, 15_000, 30_000];
@@ -468,11 +494,23 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
 
   const consider = (text: string, level: number) => {
     const woken = matchWake(text, opts.words);
+    /**
+     * Was this said to her?
+     *
+     * With a model, that is the model's answer and nothing else — what whisper
+     * wrote down has no say in it, which is the entire point: the transcript
+     * was never able to carry a name it could not spell. Without one, the old
+     * path, unchanged.
+     */
+    const addressed = detector ? detector.firedSince(detectMs) : woken.heard;
+    // What is left once the address is off the front. The model heard "hey
+    // jarvis"; whisper may have written something else down for it.
+    const rest = detector ? afterAddress(text, opts.words ?? []) : woken.rest;
     const following = followUpMs > 0 && followLeft > 0 && now() < followUntil;
-    opts.onHeard?.({ text, woke: (woken.heard || following) && Boolean(text), level });
+    opts.onHeard?.({ text, woke: (addressed || following) && Boolean(text), level });
     if (!text) return;
 
-    if (woken.heard && !woken.rest) {
+    if (addressed && !rest) {
       // Just her name. She answers, and the window means the next thing he
       // says needs no name at all.
       arm();
@@ -480,7 +518,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
       return;
     }
 
-    const said = woken.heard ? woken.rest : following ? text : "";
+    const said = addressed ? rest : following ? text : "";
     if (!said) return;
 
     // Him letting her go ends it now, rather than leaving her listening
@@ -492,14 +530,17 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
       return;
     }
 
-    if (woken.heard) arm();
+    if (addressed) arm();
     else {
       // Measured from the last thing said to her, so a conversation stays
       // open for as long as it is still a conversation.
       followLeft--;
       followUntil = now() + followUpMs;
     }
-    opts.onCommand(said, { word: woken.word, followUp: !woken.heard });
+    opts.onCommand(said, {
+      word: woken.word || (detector ? "model" : ""),
+      followUp: !addressed,
+    });
   };
 
   const drain = async () => {
@@ -535,7 +576,12 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
       ffmpeg: opts.ffmpeg,
       spawn: opts.spawn,
       onAudio: (chunk) => {
-        if (!held) segmenter.push(chunk);
+        if (held) return;
+        segmenter.push(chunk);
+        // The same bytes, scored in parallel. The model needs the whole
+        // stream, not the pieces the loudness gate decided were utterances —
+        // it is the thing that decides what was speech.
+        detector?.push(chunk);
       },
       onEnd: (why) => {
         if (stopped) return;

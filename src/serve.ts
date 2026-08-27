@@ -16,6 +16,7 @@ import {
 } from "./listen.js";
 import { kokoroSynth, synthSpeaker, createVoice, PRONOUNCE_PHONEMES } from "./voice.js";
 import { startWakeListener, type WakeListener } from "./wake.js";
+import { openDetector } from "./detect.js";
 import { existsSync } from "node:fs";
 import { BUILD } from "./version.js";
 import {
@@ -63,6 +64,13 @@ import {
   WAKE_FOLLOWUP_MS,
   WAKE_FOLLOWUPS,
   WAKE_BYE,
+  WAKE_DETECT,
+  WAKE_MODEL,
+  WAKE_PYTHON,
+  WAKE_WORKER,
+  WAKE_SCORE,
+  WAKE_VAD,
+  WAKE_DETECT_MS,
 } from "./config.js";
 
 /**
@@ -227,6 +235,31 @@ async function main() {
     const device = pickDevice(await audioDevices(ffmpeg), MIC);
     if (!device) return off("ffmpeg found no microphone. Check sound settings, or set VELA_MIC.");
 
+    /**
+     * The wake word model, if she has one.
+     *
+     * Null falls back to the old path — her name looked for in whatever
+     * whisper wrote down — which still works and is still tested, and is what
+     * runs on a machine where openwakeword was never installed.
+     */
+    const detector =
+      WAKE_DETECT && existsSync(WAKE_PYTHON)
+        ? openDetector({
+            python: WAKE_PYTHON,
+            worker: WAKE_WORKER,
+            model: WAKE_MODEL,
+            threshold: WAKE_SCORE,
+            vad: WAKE_VAD,
+            onWake: (score) =>
+              WAKE_DEBUG && console.log(`  [90m^ ${score.toFixed(3)} wake[0m`),
+            onProblem: (why) => console.log(`  [33mWake model:[0m ${why}`),
+          })
+        : null;
+    // Loading onnxruntime and the model costs about a second. Doing it here
+    // rather than inside his first sentence is the same trade the speech
+    // models already make above.
+    if (detector) await detector.ready;
+
     const speaker = synthSpeaker({
       render: (text) => mouth.render(text),
       play: resolveFfplay() ?? "ffplay",
@@ -359,6 +392,8 @@ async function main() {
 
     const listener = startWakeListener({
       device,
+      detector,
+      detectMs: WAKE_DETECT_MS,
       ffmpeg,
       words: WAKE_WORDS,
       followUpMs: WAKE_FOLLOWUP_MS,
@@ -484,8 +519,13 @@ async function main() {
       },
     };
 
-    console.log(`  Wake word on (${device}). Say "${NAME}".`);
+    console.log(
+      detector
+        ? `  Wake word on (${device}), model ${WAKE_MODEL}.`
+        : `  Wake word on (${device}). Say "${NAME}".`,
+    );
     stopListening = () => {
+      detector?.stop();
       listener.stop();
       voice.stop();
       speaker.stop();

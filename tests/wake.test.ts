@@ -5,6 +5,7 @@ import {
   isDismissal,
   createSegmenter,
   startWakeListener,
+  afterAddress,
   WAKE_WORDS,
 } from "../src/wake.js";
 import { SAMPLE_RATE, levelDb } from "../src/listen.js";
@@ -340,6 +341,35 @@ describe("createSegmenter", () => {
   });
 });
 
+describe("afterAddress", () => {
+  const words = ["vela", "vella"];
+
+  test("cuts at the name when whisper managed to write it", () => {
+    assert.equal(afterAddress("Vela, open the door.", words), "open the door.");
+  });
+
+  test("cuts at 'hey something' when it did not, which is the normal case", () => {
+    // The model heard "hey jarvis". Whisper, which has never seen the word,
+    // wrote down something else for it. Handing her own trigger back as the
+    // question is worse than guessing at the shape of one.
+    assert.equal(afterAddress("Hey Jarvis, what's the weather?", words), "what's the weather?");
+    assert.equal(afterAddress("Hey Darvis - open the door.", words), "open the door.");
+  });
+
+  test("leaves a sentence with no address on the front alone", () => {
+    assert.equal(afterAddress("open the door.", words), "open the door.");
+  });
+
+  test("a bare 'hey something' is the address itself, with nothing said after it", () => {
+    // This is only ever reached once the model has fired, so "hey <word>" at
+    // the front is the phrase it fired on rather than a greeting. Empty is the
+    // right answer and is load-bearing: it is what tells the listener he said
+    // her name and nothing else, which she answers with "Yes?" rather than a
+    // model turn.
+    assert.equal(afterAddress("Hey there.", words), "");
+  });
+});
+
 describe("startWakeListener", () => {
   /**
    * A listener with a scripted whisper and a microphone that never opens.
@@ -350,6 +380,8 @@ describe("startWakeListener", () => {
     followUpMs?: number;
     followUps?: number;
     now?: () => number;
+    /** A stand-in for the wake word model. See src/detect.ts. */
+    detector?: { firedSince: () => boolean };
   } = {}) {
     const fake = fakeSpawner();
     const commands: string[] = [];
@@ -365,6 +397,17 @@ describe("startWakeListener", () => {
       followUpMs: opts.followUpMs,
       ...(opts.followUps === undefined ? {} : { followUps: opts.followUps }),
       ...(opts.now ? { now: opts.now } : {}),
+      ...(opts.detector
+        ? {
+            detector: {
+              push: () => {},
+              firedSince: opts.detector.firedSince,
+              lastScore: () => 0.9,
+              ready: Promise.resolve(),
+              stop: () => {},
+            },
+          }
+        : {}),
       segment: { frameMs: 10, preRollMs: 20, minMs: 20, hangoverMs: 30, maxMs: 5_000 },
       hear: async (pcm) => {
         heard.push(pcm);
@@ -387,6 +430,36 @@ describe("startWakeListener", () => {
 
     return { wake, fake, commands, names, byes, heard, play, utterance };
   }
+
+  test("with a model, what whisper wrote down has no say in whether she was addressed", async () => {
+    // The whole reason for the model. base.en has never seen her name, so a
+    // real address came back as "Hello, are you there?" and the old path threw
+    // it away for not containing a name it was never going to be able to
+    // spell. The model heard the phrase; the transcript only has to carry the
+    // question.
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Hello, are you there?"],
+      detector: { firedSince: () => true },
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the command to be taken");
+    assert.deepEqual(commands, ["Hello, are you there?"]);
+    wake.stop();
+  });
+
+  test("and her name in a transcript is not an address if the model never fired", async () => {
+    // The other half, and the one that stops a room talking to itself. Whisper
+    // writes her name out of noise readily; without the model that was a
+    // session nobody opened.
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Vela, open the door."],
+      detector: { firedSince: () => false },
+    });
+    await utterance();
+    await settle();
+    assert.deepEqual(commands, [], "only the model decides she was spoken to");
+    wake.stop();
+  });
 
   test("she opens the microphone in the format whisper reads", async () => {
     const { wake, fake } = listener();

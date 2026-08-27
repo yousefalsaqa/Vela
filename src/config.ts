@@ -407,6 +407,55 @@ export const WAKE_ON = switchedOn(process.env.VELA_WAKE, true);
 export const WAKE_VOCABULARY = process.env.VELA_WAKE_VOCABULARY ?? "";
 
 /**
+ * The wake word as a model rather than a search through a transcript.
+ *
+ * Everything above this line is the old arrangement: a loudness gate, whisper,
+ * and her name looked for in what came back. It never worked well and could
+ * not be made to. base.en has never seen "Vela", so a real one came back as
+ * "Hello"; priming it with the name made it write the name out of room tone
+ * instead. The two failures share one knob and pull opposite ways.
+ *
+ * A wake word model scores 80ms of audio between 0 and 1 and has no opinion
+ * about anything else. Off means the old path, which is still there and still
+ * tested.
+ */
+export const WAKE_DETECT = switchedOn(process.env.VELA_WAKE_DETECT, true);
+
+/** A bundled name, or a path to one of her own once it has been trained. */
+export const WAKE_MODEL = process.env.VELA_WAKE_MODEL ?? "hey_jarvis";
+
+/** The python that has openwakeword in it. Its own, so nothing else drags it in. */
+export const WAKE_PYTHON =
+  process.env.VELA_WAKE_PYTHON ??
+  join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".vela-wake", "Scripts", "python.exe");
+
+export const WAKE_WORKER = resolve(here, "../scripts/wake_worker.py");
+
+/**
+ * The score a frame has to reach. The models are trained to sit right at 0.5,
+ * and the exported sigmoid means it says what it means.
+ */
+export const WAKE_SCORE = Number(process.env.VELA_WAKE_SCORE ?? "0.5");
+
+/**
+ * And how sure Silero has to be that a voice was involved.
+ *
+ * The half the loudness floor could never do: a door closing is loud and is
+ * not speech, and the old gate had no way to tell those apart.
+ */
+export const WAKE_VAD = Number(process.env.VELA_WAKE_VAD ?? "0.5");
+
+/**
+ * How long a detection stays good for.
+ *
+ * It fires on "hey jarvis", which is over before the sentence after it is, so
+ * the answer exists before the transcript it belongs to. This is how long it
+ * waits for that transcript to catch up. Too long and the sentence after the
+ * one he addressed to her also counts as addressed.
+ */
+export const WAKE_DETECT_MS = Number(process.env.VELA_WAKE_DETECT_MS ?? "6000");
+
+/**
  * What she answers to. Comma-separated, and it is a list rather than a word
  * because whisper hears the name differently depending on the vowel; the
  * defaults live in wake.ts next to the reason for each one.
