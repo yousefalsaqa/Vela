@@ -24,11 +24,15 @@ import { spawn as realSpawn, type Spawner } from "./proc.js";
 export const PRONOUNCE_PHONEMES: [RegExp, string][] = [
   [/\bYousef's\b/gi, "[Yousefs](/jˈuːsəfs/)"],
   [/\bYousef\b/gi, "[Yousef](/jˈuːsəf/)"],
+  [/\bVela's\b/gi, "[Velas](/vˈɛləz/)"],
+  [/\bVela\b/gi, "[Vela](/vˈɛlə/)"],
 ];
 
 export const PRONOUNCE_RESPELL: [RegExp, string][] = [
   // Left to itself every en-GB voice says "YO-sef".
   [/\bYousef('s)?\b/gi, "Yoosef$1"],
+  // And "VAY-la" for her own name. It rhymes with umbrella.
+  [/\bVela('s)?\b/gi, "Vella$1"],
 ];
 
 /**

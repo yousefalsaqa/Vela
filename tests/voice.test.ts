@@ -83,6 +83,14 @@ describe("speakable", () => {
       test("does not touch a word that merely contains it", () => {
         assert.equal(speakable("Yousef_Portfolio is fine"), "Yousef_Portfolio is fine");
       });
+
+      test("respells her own name so it rhymes with umbrella", () => {
+        assert.equal(speakable("I'm Vela."), "I'm Vella.");
+      });
+
+      test("handles her possessive", () => {
+        assert.equal(speakable("Vela's job"), "Vella's job");
+      });
     });
 
     describe("phonemes, for Kokoro", () => {
@@ -103,6 +111,14 @@ describe("speakable", () => {
           say("see [the docs](https://example.com), Yousef"),
           "see the docs, [Yousef](/jˈuːsəf/)",
         );
+      });
+
+      test("overrides her own name too", () => {
+        assert.equal(say("I'm Vela."), "I'm [Vela](/vˈɛlə/).");
+      });
+
+      test("handles her possessive without stranding an apostrophe", () => {
+        assert.equal(say("Vela's job"), "[Velas](/vˈɛləz/) job");
       });
 
       test("leaves other words alone", () => {
