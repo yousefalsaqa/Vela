@@ -35,8 +35,10 @@ $runner = Join-Path $repo "scripts\vela-service.cmd"
 @"
 @echo off
 cd /d "%~dp0.."
-set VELA_VOICE=off
-set VELA_LISTEN=off
+REM Unprimed base.en cannot produce the name: it decodes "Hello" or drops it
+REM entirely, so the wake word never sees it. A prior of the name alone is the
+REM narrowest fix; the gate in listen.ts still judges what comes back.
+set VELA_WAKE_VOCABULARY=Vela
 call npm run serve >> "%~dp0..\data\service.log" 2>&1
 "@ | Set-Content -Path $runner -Encoding ascii
 
