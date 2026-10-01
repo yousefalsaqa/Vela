@@ -568,10 +568,91 @@ describe("createTranscriber", () => {
     h.ears.stop();
   });
 
-  test("survives a reply that isn't JSON", async () => {
-    const h = harness(() => "ok not json at all");
-    assert.equal(await h.ears.hear(Buffer.from([1, 2, 3, 4])), "");
-    assert.match(h.problems[0] ?? "", /JSON/);
+  /** Wait on the thing rather than a tick count. */
+  const until = async (check: () => boolean, what: string) => {
+    for (let i = 0; i < 200; i++) {
+      if (check()) return;
+      await new Promise((r) => setImmediate(r));
+    }
+    assert.fail(`timed out waiting for ${what}`);
+  };
+
+  /**
+   * A worker whose replies the test writes by hand, by request id, in any
+   * order it likes, so what arrives when can be the thing under test.
+   */
+  const byHand = () => {
+    const fake = fakeSpawner();
+    const problems: string[] = [];
+    const ears = createTranscriber({
+      python: "python.exe",
+      worker: "whisper_worker.py",
+      spawn: fake.spawn,
+      onProblem: (why) => problems.push(why),
+    });
+    const proc = () => fake.last().proc;
+    const ids = () => proc().lines.map((l) => (JSON.parse(l) as { id: number }).id);
+    const reply = (id: number, text: string) => proc().say(`ok ${JSON.stringify({ id, text })}`);
+    return { ears, problems, proc, ids, reply };
+  };
+
+  test("garbage on the channel is nobody's reply, so it never becomes a transcript", async () => {
+    // This was "survives a reply that isn't JSON", with the garbage standing
+    // in as the reply. With replies matched by id a line naming no request is
+    // not a reply to anything; the request waits for its own.
+    const h = byHand();
+    const said = h.ears.hear(Buffer.from([1, 2, 3, 4]));
+    await until(() => h.ids().length === 1, "the request");
+    h.proc().say("ok not json at all");
+    h.reply(h.ids()[0], "open chrome");
+    assert.equal(await said, "open chrome");
+    h.ears.stop();
+  });
+
+  test("replies find their own sentence by id, whatever order they arrive in", async () => {
+    const h = byHand();
+    const first = h.ears.hear(Buffer.from([1, 2, 3, 4]));
+    const second = h.ears.hear(Buffer.from([5, 6, 7, 8]));
+    await until(() => h.ids().length === 2, "both requests");
+    const [a, b] = h.ids();
+    h.reply(b, "and the second");
+    h.reply(a, "the first thing");
+    assert.deepEqual([await first, await second], ["the first thing", "and the second"]);
+    h.ears.stop();
+  });
+
+  test("an error printed at startup is not taken as the answer to the first thing he says", async () => {
+    // By position it was: the worker's warm-up failure line answered his
+    // first sentence, and every sentence after got the transcript of the one
+    // before it.
+    const h = byHand();
+    const said = h.ears.hear(Buffer.from([1, 2, 3, 4]));
+    await until(() => h.ids().length === 1, "the request");
+    h.proc().say("err warm-up failed: out of memory");
+    h.reply(h.ids()[0], "what time is it");
+    assert.equal(await said, "what time is it");
+    assert.match(h.problems.join(" "), /warm-up failed/, "and it is still said, not swallowed");
+    h.ears.stop();
+  });
+
+  test("a sentence given up on cannot have its late reply land on the next one", async (t) => {
+    // The failure the ids exist for. A read that timed out stayed in the
+    // queue, so when its answer finally came it was handed to the sentence
+    // after, as what he said.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const h = byHand();
+    const lost = h.ears.hear(Buffer.from([1, 2, 3, 4]));
+    await until(() => h.ids().length === 1, "the first request");
+    t.mock.timers.tick(120_000);
+    assert.equal(await lost, "");
+    const next = h.ears.hear(Buffer.from([5, 6, 7, 8]));
+    await until(() => h.ids().length === 2, "the second request");
+    const [late, mine] = h.ids();
+    // In this order, by position, his reply went to the dead request and the
+    // stale one, arriving after, became what he said.
+    h.reply(mine, "the sentence he just said");
+    h.reply(late, "the stale sentence");
+    assert.equal(await next, "the sentence he just said");
     h.ears.stop();
   });
 
@@ -1003,5 +1084,27 @@ describe("saidSomething, against a confident repetition", () => {
   test("a real sentence with good scores is untouched", () => {
     const real = { text: "Vela, what is on my calendar", silence: 0.02, logprob: -0.3 };
     assert.equal(saidSomething(real), true);
+  });
+});
+
+describe("priming whisper when her name is heard", () => {
+  test("the warm-up goes first and its answer is nobody's, so the question still gets its own", async () => {
+    // The wake word fires half a second before the utterance around it closes,
+    // and that is when the paged-out model is touched. The worker answers in
+    // order, one line per request; a warm-up answer taken for the question's
+    // would hand her an empty transcript for the thing he actually asked.
+    const asked: Record<string, string>[] = [];
+    const fake = fakeSpawner(({ proc }) =>
+      respondToRequests(proc, (request) => {
+        asked.push(request);
+        return request.warm ? `ok ${JSON.stringify({ text: "", silence: 1, logprob: 0 })}` : `ok ${JSON.stringify({ text: "what time is it" })}`;
+      }),
+    );
+    const ears = createTranscriber({ python: "python.exe", worker: "whisper_worker.py", spawn: fake.spawn });
+    ears.prime();
+    const said = await ears.hear(Buffer.alloc(3200, 1));
+    assert.equal(said, "what time is it");
+    assert.equal(asked[0]?.warm, true as unknown as string, "the page-in was asked for first");
+    ears.stop();
   });
 });

@@ -1213,6 +1213,22 @@ describe("the beat between sentences", () => {
     assert.equal(fake.last().proc.written.length, 100);
   });
 
+  test("opened ahead of the reply, the player is already up and the first sentence still gets no beat", () => {
+    // ffplay's ~450ms startup used to be paid by her first sentence, in front
+    // of him. Opened while the model thinks, it is paid inside a wait that was
+    // happening anyway — which is only a win if the first sentence neither
+    // starts a second player nor picks up the pause meant for sentences after it.
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ gapMs: 150, sampleRate: 24_000, spawn: fake.spawn });
+    player.open();
+    player.open();
+    assert.equal(fake.spawned.length, 1, "started once, before there was anything to say");
+    const primed = fake.last().proc.written.length;
+    player.write(Buffer.alloc(100, 7));
+    assert.equal(fake.spawned.length, 1, "the sentence plays through the player that was opened");
+    assert.equal(fake.last().proc.written.length, primed + 100, "no beat before the sentence he is waiting on");
+  });
+
   test("a beat before every sentence after it", () => {
     const fake = fakeSpawner();
     const player = pcmPlayer({ gapMs: 150, sampleRate: 24_000, spawn: fake.spawn });
@@ -1316,6 +1332,19 @@ describe("synthSpeaker", () => {
     });
     return { speaker, fake, problems, asked };
   };
+
+  test("a line rendered ahead of time is played from memory, not rendered again", async () => {
+    // The filler exists to fill the silence while the model thinks. Rendered
+    // on the spot it costs 0.2-0.3s of Kokoro, which is most of that silence;
+    // rendered at startup it costs nothing, and the audio has to be the same.
+    const h = harness();
+    await h.speaker.prime!(["One sec."]);
+    const primed = h.asked.length;
+    h.speaker.speak("One sec.");
+    await settle();
+    assert.equal(h.asked.length, primed, "no second trip to Kokoro for a line it already rendered");
+    assert.deepEqual(h.fake.last().proc.written, Buffer.from([1, 2, 3, 4]));
+  });
 
   test("a sentence still inside Kokoro when he cuts her off must not play afterwards", async () => {
     // Rendering costs about half a second, so an interruption almost always

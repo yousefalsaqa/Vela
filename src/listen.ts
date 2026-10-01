@@ -168,11 +168,41 @@ export function captureArgs(device: string, rate = SAMPLE_RATE): string[] {
     "-hide_banner",
     "-loglevel", "error",
     "-f", "dshow",
+    // Left to dshow, his microphone hands over audio half a second at a time,
+    // measured: 7 chunks in 4s, 506ms apart. Everything downstream waits for
+    // the next lump — the wake word, the gate deciding he has stopped — so a
+    // detection could sit unheard for up to 500ms. At 50ms it is 52ms apart.
+    "-audio_buffer_size", String(CAPTURE_BUFFER_MS),
     "-i", `audio=${device}`,
+    "-af", rumbleFilter(),
     "-ac", "1",                 // whisper wants mono
     "-ar", String(rate),        // at 16 kHz
     "-f", "s16le", "pipe:1",    // raw, straight down stdout
   ];
+}
+
+/** How much audio the capture hands over at a time. See captureArgs. */
+export const CAPTURE_BUFFER_MS = 50;
+
+/**
+ * Below this, nothing he says matters, and his laptop's fans live there.
+ *
+ * Measured on 2026-10-01 with the fans spun up: the room read -34.7 dBFS, 98%
+ * of it between 40 and 100 Hz — a 41 Hz fundamental with harmonics at 82 and
+ * 123, vibration coming through the chassis into the microphone array. That
+ * sat exactly on the gate's bar, so the gate never closed: every utterance ran
+ * to the fifteen-second cut and whisper timed out on blocks of fan. It comes
+ * and goes with load, which is why she worked yesterday and not today, and why
+ * she is worst at the moment she is busiest.
+ *
+ * Two passes of a 100 Hz high-pass took the room to -57 dBFS and cost speech
+ * 0.3 dB. Every listener gets it — the gate, whisper, the wake word — because
+ * it is applied at the capture.
+ */
+export const RUMBLE_CUT_HZ = 100;
+
+export function rumbleFilter(hz = RUMBLE_CUT_HZ): string {
+  return `highpass=f=${hz},highpass=f=${hz}`;
 }
 
 /**
@@ -533,6 +563,17 @@ export interface Transcriber {
    * he stops.
    */
   warm: () => void;
+  /**
+   * Make the model resident again, now, because a sentence is on its way.
+   *
+   * warm() only starts the process. A worker that has sat idle for an hour is
+   * still running, but Windows has paged its model out: measured on this
+   * machine, 1.9GB committed and 113MB of it in memory, and the first
+   * transcription afterwards took 1.07s against 0.53s for the next. The wake
+   * word fires half a second before the utterance around it closes, so the
+   * page-in can happen in that gap instead of inside his wait.
+   */
+  prime: () => void;
   stop: () => void;
 }
 
@@ -599,7 +640,27 @@ export function createTranscriber(opts: {
     opts.onProblem?.(why);
   };
 
-  const waiting: ((line: string) => void)[] = [];
+  /**
+   * Requests waiting on a reply, by the id they were sent with.
+   *
+   * They were a queue once, answered in the order they were sent, which holds
+   * only as long as every request gets exactly one reply. One that timed out
+   * stayed in the queue, and a startup error line was taken as the first
+   * reply, and either way every transcript after it went to the utterance
+   * before: the wrong sentence handed to her as what he said. Reading early
+   * (see WAKE_EARLY_MS) sends more requests, so the order is no longer
+   * trusted at all. A reply names its request, and one that names nothing is
+   * nobody's.
+   */
+  const waiting = new Map<number, (line: string) => void>();
+  let nextId = 0;
+  /** Send a request and register what to do with its reply. */
+  const ask = (live: ChildProcess, body: Record<string, unknown>, done: (line: string) => void) => {
+    const id = nextId++;
+    waiting.set(id, done);
+    live.stdin!.write(`${JSON.stringify({ id, ...body })}\n`);
+    return id;
+  };
 
   /** The worker, started at most once. */
   let worker: ChildProcess | null = null;
@@ -628,7 +689,20 @@ export function createTranscriber(opts: {
         buffered = buffered.slice(cut + 1);
         // The loader prints its own warnings to stdout; only the protocol counts.
         if (!line.startsWith("ok ") && !line.startsWith("err ")) continue;
-        waiting.shift()?.(line);
+        let id: unknown;
+        try {
+          id = (JSON.parse(line.slice(line.indexOf(" ") + 1)) as { id?: unknown }).id;
+        } catch {
+          id = undefined;
+        }
+        const done = typeof id === "number" ? waiting.get(id) : undefined;
+        if (!done) {
+          // A startup error, or a reply whose request already gave up.
+          if (line.startsWith("err ")) complain(`whisper: ${line.slice(4)}`);
+          continue;
+        }
+        waiting.delete(id as number);
+        done(line);
       }
     });
 
@@ -650,21 +724,32 @@ export function createTranscriber(opts: {
       writeFileSync(file, normalise(pcm));
 
       const status = await new Promise<string>((done) => {
-        waiting.push(done);
-        live.stdin!.write(
-          `${JSON.stringify({
+        const id = ask(
+          live,
+          {
             pcm: file,
             rate: SAMPLE_RATE,
             // Sent only when a caller decided it, so the worker keeps its own.
             ...(over?.vocabulary === undefined ? {} : { prompt: over.vocabulary }),
-          })}\n`,
+          },
+          done,
         );
-        setTimeout(() => done("err timed out"), 120_000).unref?.();
+        // Given up on, it is taken out of the map, so a reply that turns up
+        // late lands nowhere rather than on the next sentence.
+        setTimeout(() => {
+          if (waiting.delete(id)) done(`err ${JSON.stringify({ error: "timed out" })}`);
+        }, 120_000).unref?.();
       });
       rmSync(file, { force: true });
 
       if (!status.startsWith("ok ")) {
-        complain(`whisper failed: ${status.replace(/^err /, "")}`);
+        let why = status.slice(4);
+        try {
+          why = (JSON.parse(why) as { error?: string }).error ?? why;
+        } catch {
+          /* plain text already */
+        }
+        complain(`whisper failed: ${why}`);
         return "";
       }
       try {
@@ -688,6 +773,15 @@ export function createTranscriber(opts: {
 
     warm() {
       if (!stopped) ensureWorker();
+    },
+
+    prime() {
+      if (stopped) return;
+      const live = ensureWorker();
+      if (!live.stdin?.writable) return;
+      // A request like any other, with an id, so its reply cannot be taken for
+      // a transcript. Its own answer is nobody's.
+      ask(live, { warm: true }, () => {});
     },
 
     stop() {
@@ -724,6 +818,7 @@ export function cliTranscriber(opts: ListenOptions = {}): Transcriber {
     // Nothing to keep warm: this path loads the model per utterance, which is
     // the whole reason the worker above exists.
     warm() {},
+    prime() {},
     stop() {
       rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     },

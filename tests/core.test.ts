@@ -532,6 +532,71 @@ describe("createCore", () => {
     });
   });
 
+  describe("the talking model", () => {
+    /** The session's setModel, answering each call from `answers` in order. */
+    const switching = (answers: ("ok" | Error)[]) => {
+      const asked: (string | undefined)[] = [];
+      script.session.setModel = (model?: string) => {
+        asked.push(model);
+        const answer = answers.shift() ?? "ok";
+        return answer === "ok" ? Promise.resolve() : Promise.reject(answer);
+      };
+      return asked;
+    };
+    const refusal = () => new Error('"claude-sonnet-5-5" isn\'t described by this version\'s model catalog');
+
+    test("a spoken turn is sent only after the session has moved to the talking model", async () => {
+      const asked = switching(["ok"]);
+      const core = build({ model: "opus", talkModel: "sonnet" });
+      core.send("how's it going", { spoken: true });
+      await until(() => script.sent.length > 0, "the turn to reach the session");
+      assert.deepEqual(asked, ["sonnet"]);
+      core.stop();
+    });
+
+    test("a switch the session refused is asked for again on the next spoken turn", async () => {
+      const asked = switching([refusal(), "ok"]);
+      const core = build({ model: "opus", talkModel: "sonnet" });
+      core.send("how's it going", { spoken: true });
+      await until(() => script.sent.length === 1, "the first turn, on whatever model");
+      script.emit(result());
+      core.send("what's up", { spoken: true });
+      await until(() => script.sent.length === 2, "the second turn");
+      assert.deepEqual(
+        asked,
+        ["sonnet", "sonnet"],
+        "recorded as done when it was refused, every spoken turn after it stays on the slow model",
+      );
+      core.stop();
+    });
+
+    test("a refused switch still sends the turn, and is said once rather than every turn", async () => {
+      switching([refusal(), refusal()]);
+      const problems: string[] = [];
+      const core = build({ model: "opus", talkModel: "sonnet", onProblem: (why: string) => problems.push(why) });
+      core.send("how's it going", { spoken: true });
+      await until(() => script.sent.length === 1, "the turn, despite the refusal");
+      script.emit(result());
+      core.send("what's up", { spoken: true });
+      await until(() => script.sent.length === 2, "the second turn");
+      assert.equal(problems.length, 1, "the same refusal on every turn is noise in the log");
+      assert.match(problems[0], /sonnet/);
+      core.stop();
+    });
+
+    test("a switch that worked is not asked for again while the conversation stays spoken", async () => {
+      const asked = switching(["ok", "ok"]);
+      const core = build({ model: "opus", talkModel: "sonnet" });
+      core.send("how's it going", { spoken: true });
+      await until(() => script.sent.length === 1, "the first turn");
+      script.emit(result());
+      core.send("what's up", { spoken: true });
+      await until(() => script.sent.length === 2, "the second turn");
+      assert.deepEqual(asked, ["sonnet"], "a control request per turn would put a round trip in front of every answer");
+      core.stop();
+    });
+  });
+
   describe("stop", () => {
     test("closes the session and ignores later turns", async () => {
       const core = build();

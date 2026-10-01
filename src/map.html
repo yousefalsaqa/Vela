@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Places</title>
+<!--
+  The live map. Written once, never by her: every search, "wider", "further
+  down the street" and "that one" arrives as state from the hub and moves this
+  same map, so nothing is ever redrawn from scratch.
+
+  The one idea: everything is measured from his door. The rings are 5, 10, 15
+  and 20 minutes on foot; each place is marked with its own walking time; open
+  places are lit, closed ones are not. Gold is home, and whatever he picks.
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Newsreader:opsz,wght@6..72,400..500&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/leaflet.css">
+<style>
+:root {
+  --void: #05090d;
+  --well: #0a121a;
+  --rule: #15222c;
+  --ink: #e9f2f6;
+  --dim: #7a929e;
+  --faint: #3f525d;
+  --cyan: #4fd1db;
+  --gold: #f5b95f;
+  --serif: "Instrument Serif", Georgia, serif;
+  /* Instrument Serif is her voice in the hub and a condensed display face:
+     right for a headline, squeezed thin at list sizes. Names are data, so
+     they get a text face with ordinary proportions. */
+  --text: "Newsreader", Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--void); color: var(--ink); font: 12px/1.45 var(--mono); -webkit-font-smoothing: antialiased; overflow: hidden; }
+
+.chart { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); height: 100%; }
+.sea { position: relative; min-width: 0; min-height: 0; }
+#map { position: absolute; inset: 0; z-index: 0; background: var(--void); }
+
+/* The chart itself: OpenStreetMap's tiles, turned to night and tinted into
+   the hub's blue-black, so the places are the brightest thing on it. */
+.leaflet-container { background: var(--void); font: 11px var(--mono); }
+.leaflet-tile-pane { filter: invert(1) hue-rotate(185deg) saturate(.32) brightness(.62) contrast(1.18); }
+
+.sea::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 132px; z-index: 1; pointer-events: none;
+  background: linear-gradient(var(--void) 8%, rgba(5, 9, 13, .78) 48%, transparent);
+}
+.head { position: absolute; top: 18px; left: 22px; right: 70px; z-index: 2; pointer-events: none; }
+.head h1 { margin: 0; font: italic 400 30px/1.05 var(--serif); letter-spacing: -.01em; }
+.head p { margin: 8px 0 0; font: 500 10.5px/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+
+.key {
+  position: absolute; left: 14px; bottom: 14px; z-index: 2; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 8px 11px; border: 1px solid var(--rule); border-radius: 10px; background: rgba(5, 9, 13, .82);
+  font: 500 10px/1 var(--mono); letter-spacing: .08em; color: var(--dim); pointer-events: none;
+}
+.key span { display: inline-flex; align-items: center; gap: 6px; }
+.key .tag { position: static; transform: none; min-width: 20px; height: 16px; font-size: 9.5px; padding: 0 4px; box-shadow: none; }
+.key .dot { position: static; transform: none; display: inline-block; }
+/* A rating in the key only when the map has ratings to show; dots otherwise. */
+.key:not([data-rated]) .tag, .key:not([data-rated]) .rated-only, .key[data-rated] .dot { display: none; }
+
+/* ── Home and the rings ─────────────────────────────────────────────── */
+.home-mark {
+  position: absolute; width: 12px; height: 12px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--gold);
+  box-shadow: 0 0 0 5px rgba(245, 185, 95, .16), 0 0 0 11px rgba(245, 185, 95, .07), 0 0 24px rgba(245, 185, 95, .5);
+}
+.home-word {
+  position: absolute; transform: translate(14px, -50%); white-space: nowrap;
+  font: 600 10px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--gold);
+}
+.ring-label span {
+  position: absolute; transform: translate(-50%, -135%); white-space: nowrap; padding: 2px 6px; border-radius: 4px;
+  background: rgba(5, 9, 13, .78); color: rgba(79, 209, 219, .8); font: 500 9.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+}
+.ring { animation: ring-in .9s ease-out both; }
+.ring.r1, .ring-label.r1 span { animation-delay: .12s; }
+.ring.r2, .ring-label.r2 span { animation-delay: .24s; }
+.ring.r3, .ring-label.r3 span { animation-delay: .36s; }
+.ring-label span { animation: fade-in .9s ease-out both; }
+@keyframes ring-in { from { stroke-opacity: 0; } }
+@keyframes fade-in { from { opacity: 0; } }
+
+/* ── Places: lit when open, unlit when shut ─────────────────────────── */
+.pin .tag, .pin .dot { cursor: pointer; }
+.tag {
+  position: absolute; transform: translate(-50%, -50%); display: grid; place-items: center;
+  min-width: 25px; height: 22px; padding: 0 6px; border-radius: 11px;
+  font: 600 12px/1 var(--mono); letter-spacing: -.03em;
+  transition: transform .16s ease, box-shadow .16s ease, background-color .16s ease, color .16s ease;
+}
+.tag[data-state="open"] { background: var(--cyan); color: #03161a; box-shadow: 0 0 0 1px rgba(79, 209, 219, .35), 0 0 16px rgba(79, 209, 219, .35); }
+.tag[data-state="unknown"] { background: #0b1820; color: var(--cyan); border: 1px solid rgba(79, 209, 219, .55); }
+.tag[data-state="closed"] { background: #0a1016; color: var(--faint); border: 1px solid #22323c; }
+.tag[data-sel] {
+  background: var(--gold); color: #1a1204; border-color: var(--gold); transform: translate(-50%, -50%) scale(1.18);
+  box-shadow: 0 0 0 4px rgba(245, 185, 95, .18), 0 0 26px rgba(245, 185, 95, .5);
+}
+.pin.hot .tag:not([data-sel]) { transform: translate(-50%, -50%) scale(1.14); }
+.dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); transition: transform .16s ease; }
+.dot[data-state="open"] { background: var(--cyan); box-shadow: 0 0 8px rgba(79, 209, 219, .6); }
+.dot[data-state="unknown"] { border: 1.5px solid rgba(79, 209, 219, .6); }
+.dot[data-state="closed"] { background: #22323c; }
+.pin.hot .dot { transform: translate(-50%, -50%) scale(1.6); }
+.dot[data-sel] { width: 12px; height: 12px; background: var(--gold); border: 0; box-shadow: 0 0 0 4px rgba(245, 185, 95, .18), 0 0 18px rgba(245, 185, 95, .55); }
+/* No arrival animation on the places themselves. A staggered fade-in was
+   tried, and a render that never ran it left every marker at opacity 0 —
+   the map's whole content, gone. The rings draw in; the places just are. */
+.pin[hidden] { display: none; }
+
+.leaflet-tooltip.tip {
+  padding: 6px 10px; border: 1px solid var(--rule); border-radius: 8px; background: rgba(10, 18, 26, .96); color: var(--ink);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .55); font: 500 14px/1.2 var(--text);
+}
+.leaflet-tooltip.tip::before { display: none; }
+
+.leaflet-bar { border: 1px solid var(--rule) !important; border-radius: 10px !important; overflow: hidden; box-shadow: none !important; }
+.leaflet-bar a, .leaflet-bar a:hover {
+  width: 30px; height: 30px; line-height: 30px; background: rgba(10, 18, 26, .92); color: var(--ink);
+  border-bottom-color: var(--rule); font: 400 16px/30px var(--mono);
+}
+.leaflet-bar a:hover { color: var(--cyan); }
+.leaflet-control-attribution.leaflet-control {
+  background: rgba(5, 9, 13, .72); color: var(--faint); font: 9.5px/1.4 var(--mono); padding: 2px 8px; border-radius: 6px 0 0 0;
+}
+.leaflet-container :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+/* ── The list: a departures board, soonest first ─────────────────────── */
+.rail { display: flex; flex-direction: column; min-height: 0; background: var(--well); border-left: 1px solid var(--rule); }
+.rail-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+.seg { display: inline-flex; padding: 2px; border: 1px solid var(--rule); border-radius: 999px; }
+.seg button {
+  padding: 7px 11px; border: 0; border-radius: 999px; background: none; color: var(--dim); cursor: pointer;
+  font: 500 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+}
+.seg button[aria-pressed="true"] { background: var(--cyan); color: #03161a; }
+.seg button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.count { color: var(--faint); font: 10.5px/1 var(--mono); letter-spacing: .08em; white-space: nowrap; }
+
+.list { flex: 1; min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #1d2b34 transparent; }
+.list li[hidden] { display: none; }
+.place {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; width: 100%; padding: 13px 16px 13px 12px;
+  border: 0; border-bottom: 1px solid var(--rule); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: background-color .15s ease, box-shadow .15s ease;
+}
+.list li[data-hot] .place, .place:hover { background: rgba(79, 209, 219, .045); }
+.list li[data-sel] .place { background: rgba(245, 185, 95, .06); box-shadow: inset 2px 0 var(--gold); }
+.place:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.mins { display: flex; flex-direction: column; align-items: flex-end; padding-top: 1px; }
+.mins b { font: 600 22px/1 var(--mono); letter-spacing: -.05em; color: var(--cyan); }
+.mins i { margin-top: 5px; font: normal 500 8.5px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.list li[data-state="unknown"] .mins b { color: var(--dim); }
+.list li[data-state="closed"] .mins b { color: var(--faint); }
+.list li[data-sel] .mins b { color: var(--gold); }
+.mins[data-unrated] b { color: var(--faint); font-weight: 400; }
+.mins i { white-space: nowrap; }
+.name { display: block; font: 500 17px/1.2 var(--text); color: var(--ink); overflow-wrap: anywhere; }
+.facts { display: block; margin-top: 3px; color: var(--dim); font: 11px/1.4 var(--mono); overflow-wrap: anywhere; }
+.status { display: flex; align-items: center; gap: 7px; margin-top: 7px; color: var(--dim); font: 500 10.5px/1 var(--mono); letter-spacing: .05em; }
+.light { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.list li[data-state="open"] .status { color: var(--cyan); }
+.list li[data-state="open"] .light { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+.list li[data-state="unknown"] .light { background: var(--faint); }
+.list li[data-state="closed"] .light { border: 1px solid var(--faint); }
+
+.card { padding: 2px 16px 16px 68px; border-bottom: 1px solid var(--rule); background: rgba(245, 185, 95, .06); box-shadow: inset 2px 0 var(--gold); }
+.card dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0 0 14px; font: 11px/1.4 var(--mono); }
+.card dt { padding-top: 2px; color: var(--faint); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+.card dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actions button { padding: 9px 13px; border-radius: 999px; cursor: pointer; font: 500 10.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.actions .go { border: 0; background: var(--gold); color: #1a1204; }
+.actions .ask { border: 1px solid #2a3a44; background: none; color: var(--ink); }
+.actions .ask:hover { border-color: var(--dim); }
+.actions button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.actions .sent { opacity: .55; }
+
+.empty { padding: 28px 20px; }
+.empty p { margin: 0; }
+.empty p:first-child { margin-bottom: 8px; font: italic 20px/1.2 var(--serif); color: var(--ink); }
+.empty p + p { color: var(--dim); font: 11px/1.5 var(--mono); }
+
+@media (max-width: 760px) {
+  .chart { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(250px, 56%) minmax(0, 1fr); }
+  .rail { border-left: 0; border-top: 1px solid var(--rule); }
+  .head h1 { font-size: 24px; }
+  .key { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<main class="chart">
+  <section class="sea" aria-label="Map">
+    <div id="map"></div>
+    <header class="head">
+      <h1 id="title">Places</h1>
+      <p id="meta">Loading the map</p>
+    </header>
+    <div class="key" aria-hidden="true">
+      <span><span class="tag" data-state="open">4.6</span><span class="dot" data-state="open"></span>open</span>
+      <span><span class="tag" data-state="unknown">4.6</span><span class="dot" data-state="unknown"></span>hours not listed</span>
+      <span><span class="tag" data-state="closed">4.6</span><span class="dot" data-state="closed"></span>closed</span>
+      <span class="rated-only">Google rating · dots are unrated</span>
+    </div>
+  </section>
+  <aside class="rail" aria-label="Places, best first">
+    <div class="rail-head">
+      <div class="seg" role="group" aria-label="Show">
+        <button type="button" id="showOpen" aria-pressed="false">Open now</button>
+        <button type="button" id="showAll" aria-pressed="true">All</button>
+      </div>
+      <span class="count" id="count" aria-live="polite"></span>
+    </div>
+    <ol class="list" id="list"></ol>
+    <div class="empty" id="empty" hidden><p></p><p></p></div>
+  </aside>
+</main>
+<script src="/leaflet.js"></script>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const list = $("list");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (!window.L) {
+    $("meta").textContent = "The map library didn't load";
+    showEmpty("The map couldn't start.", "Its library didn't load from Vela. Restart her and ask again.");
+    return;
+  }
+
+  /**
+   * How far apart two tags must sit, in screen pixels, before both may show
+   * their minutes. Downtown, dozens of places are a minute from his door, and
+   * tags that land on each other read as a blob; the nearer one keeps its tag
+   * and the rest become dots until he zooms in and they have room.
+   */
+  const TAG_ROOM = 34;
+  /** Straight-line metres per minute on foot — the same arithmetic as places.ts. */
+  const M_PER_MIN = 80 / 1.25;
+  const RINGS = [5, 10, 15, 20];
+
+  const map = L.map("map", {
+    zoomControl: false,
+    attributionControl: false,
+    zoomSnap: 0.25,
+    zoomDelta: 0.5,
+    wheelPxPerZoomLevel: 90,
+  });
+  L.control.zoom({ position: "topright" }).addTo(map);
+  L.control.attribution({ position: "bottomright", prefix: false })
+    .addAttribution("© OpenStreetMap contributors")
+    .addTo(map);
+  // Through Vela, not straight from OpenStreetMap: this page is sandboxed, so
+  // its own requests cannot say who they are and OSM refuses them. The key is
+  // the one this page was opened with. See tiles.ts.
+  const key = new URLSearchParams(location.search).get("s") || "";
+  L.tileLayer("/tiles/{z}/{x}/{y}.png?s=" + encodeURIComponent(key), { maxZoom: 19 }).addTo(map);
+
+  const homeLayer = L.layerGroup().addTo(map);
+  const streetLayer = L.layerGroup().addTo(map);
+  /** id → { marker, place, tagged } */
+  const markers = new Map();
+
+  let S = null;
+  let selected = null;
+  let openOnly = false;
+  let homeKey = "";
+  let first = true;
+
+  const stateOf = (p) => (p.status.open === true ? "open" : p.status.open === false ? "closed" : "unknown");
+  const tell = (words) => parent.postMessage({ vela: words }, "*");
+
+  /* ── Home, and the rings measured from it ───────────────────────────── */
+  function drawHome(home) {
+    const key = home.lat + "," + home.lon;
+    if (key === homeKey) return;
+    homeKey = key;
+    homeLayer.clearLayers();
+    RINGS.forEach((min, i) => {
+      const r = min * M_PER_MIN;
+      homeLayer.addLayer(L.circle([home.lat, home.lon], {
+        radius: r, interactive: false, fill: false, weight: 1.2, color: "#4fd1db", opacity: .5,
+        dashArray: "2 7", className: "ring r" + i,
+      }));
+      homeLayer.addLayer(L.marker([home.lat + r / 111320, home.lon], {
+        interactive: false, keyboard: false, zIndexOffset: -500,
+        icon: L.divIcon({ className: "ring-label r" + i, iconSize: null, html: "<span>" + min + " min</span>" }),
+      }));
+    });
+    homeLayer.addLayer(L.marker([home.lat, home.lon], {
+      interactive: false, keyboard: false, zIndexOffset: -400,
+      icon: L.divIcon({ className: "home", iconSize: null, html: '<span class="home-mark"></span><span class="home-word">Home</span>' }),
+    }));
+  }
+
+  /* ── The street he is looking along ─────────────────────────────────── */
+  function drawStreet(line) {
+    streetLayer.clearLayers();
+    if (!Array.isArray(line) || line.length < 2) return;
+    const ll = line.map((p) => [p.lat, p.lon]);
+    streetLayer.addLayer(L.polyline(ll, { color: "#e9f2f6", weight: 14, opacity: .06, interactive: false, lineCap: "round", lineJoin: "round" }));
+    streetLayer.addLayer(L.polyline(ll, { color: "#e9f2f6", weight: 1.5, opacity: .38, dashArray: "1 7", interactive: false, lineCap: "round" }));
+  }
+
+  /* ── Markers ─────────────────────────────────────────────────────────── */
+  /* A marker says how good a place is, not how far: he asked for the rating,
+     and the minutes on foot read as an arbitrary numbering. A place Google
+     has not rated is a dot, so a number always means a rating. */
+  function iconFor(p, tagged) {
+    const state = stateOf(p);
+    const sel = p.id === selected;
+    const rated = typeof p.rating === "number";
+    const html = rated && (tagged || sel)
+      ? '<span class="tag" data-state="' + state + '"' + (sel ? " data-sel" : "") + ">" + p.rating.toFixed(1) + "</span>"
+      : '<span class="dot" data-state="' + state + '"' + (sel ? " data-sel" : "") + "></span>";
+    return L.divIcon({ className: "pin", iconSize: null, html });
+  }
+
+  function tip(p) {
+    const el = document.createElement("span");
+    el.textContent = p.name;
+    return el;
+  }
+
+  function refresh(id) {
+    const m = markers.get(id);
+    if (!m) return;
+    m.marker.setIcon(iconFor(m.place, m.tagged));
+    m.marker.setZIndexOffset(id === selected ? 5000 : m.z);
+    filterMarker(m);
+  }
+
+  /**
+   * Which places show their minutes, for the zoom he is at: nearest first, and
+   * only where a tag has room. Rerun on every zoom, because room is a matter
+   * of pixels, not metres.
+   */
+  function retag() {
+    if (!S || !markers.size) return;
+    const cells = new Map();
+    const cellOf = (x, y) => Math.floor(x / TAG_ROOM) + ":" + Math.floor(y / TAG_ROOM);
+    const crowded = (pt) => {
+      const cx = Math.floor(pt.x / TAG_ROOM);
+      const cy = Math.floor(pt.y / TAG_ROOM);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (const q of cells.get((cx + dx) + ":" + (cy + dy)) || []) {
+            if (Math.abs(q.x - pt.x) < TAG_ROOM && Math.abs(q.y - pt.y) < TAG_ROOM * .8) return true;
+          }
+        }
+      }
+      return false;
+    };
+    // In the list's order, which is best first once there are ratings: where
+    // tags crowd, the better place keeps its number.
+    const order = S.places.filter((p) => markers.has(p.id) && typeof p.rating === "number" && !(openOnly && p.status.open !== true && p.id !== selected));
+    if (selected) order.sort((a, b) => (b.id === selected) - (a.id === selected));
+    for (const p of order) {
+      const m = markers.get(p.id);
+      const pt = map.latLngToLayerPoint(m.marker.getLatLng());
+      const tagged = p.id === selected || !crowded(pt);
+      if (tagged) {
+        const k = cellOf(pt.x, pt.y);
+        if (!cells.has(k)) cells.set(k, []);
+        cells.get(k).push(pt);
+      }
+      if (tagged !== m.tagged) {
+        m.tagged = tagged;
+        refresh(p.id);
+      }
+    }
+  }
+  map.on("zoomend", retag);
+
+  function syncMarkers(places) {
+    const keep = new Set(places.map((p) => p.id));
+    for (const [id, m] of markers) {
+      if (!keep.has(id)) {
+        m.marker.remove();
+        markers.delete(id);
+      }
+    }
+    places.forEach((p, i) => {
+      const z = 1000 - i;
+      const had = markers.get(p.id);
+      if (had) {
+        const changed = stateOf(had.place) !== stateOf(p) || had.place.walkMin !== p.walkMin || had.place.rating !== p.rating;
+        Object.assign(had, { place: p, z });
+        if (changed) refresh(p.id);
+        else { had.marker.setZIndexOffset(p.id === selected ? 5000 : z); filterMarker(had); }
+        return;
+      }
+      // Arrives as a dot; retag() gives it its minutes if there is room.
+      const tagged = false;
+      const marker = L.marker([p.lat, p.lon], { icon: iconFor(p, tagged), zIndexOffset: z, keyboard: false, riseOnHover: true });
+      marker.bindTooltip(tip(p), { direction: "top", offset: [0, -14], className: "tip" });
+      marker.on("click", () => select(selected === p.id ? null : p.id, { fly: false, scroll: true }));
+      marker.on("mouseover", () => hot(p.id, true));
+      marker.on("mouseout", () => hot(p.id, false));
+      marker.addTo(map);
+      const m = { marker, place: p, tagged, z };
+      markers.set(p.id, m);
+      filterMarker(m);
+    });
+  }
+
+  function filterMarker(m) {
+    const el = m.marker.getElement();
+    if (el) el.hidden = openOnly && m.place.status.open !== true && m.place.id !== selected;
+  }
+
+  /* ── The list ────────────────────────────────────────────────────────── */
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  /** 1234 → "1.2k", so a review count fits under a rating. */
+  function compact(n) {
+    return n >= 10000 ? Math.round(n / 1000) + "k" : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(n);
+  }
+
+  function hostOf(url) {
+    try { return new URL(/^https?:/i.test(url) ? url : "https://" + url).host.replace(/^www\./, ""); }
+    catch { return url; }
+  }
+
+  function row(p) {
+    const li = el("li");
+    li.dataset.id = p.id;
+    li.dataset.state = stateOf(p);
+
+    const b = el("button", "place");
+    b.type = "button";
+    b.setAttribute("aria-expanded", "false");
+    const mins = el("span", "mins");
+    if (typeof p.rating === "number") mins.append(el("b", "", p.rating.toFixed(1)), el("i", "", "★ " + compact(p.reviews || 0)));
+    else if (anyRated) { mins.dataset.unrated = ""; mins.append(el("b", "", "–"), el("i", "", "unrated")); }
+    // Nothing on the map is rated (no key yet): the walk is the useful number.
+    else mins.append(el("b", "", String(Number(p.walkMin) | 0)), el("i", "", "min"));
+    const body = el("span", "body");
+    const facts = [p.cuisine || p.kind, "$".repeat(p.price || 0), p.address, anyRated ? (Number(p.walkMin) | 0) + " min walk" : ""].filter(Boolean).join(" · ");
+    const status = el("span", "status");
+    status.append(el("span", "light"), el("span", "", p.status.label));
+    body.append(el("span", "name", p.name), el("span", "facts", facts), status);
+    b.append(mins, body);
+    b.addEventListener("click", () => select(selected === p.id ? null : p.id, { fly: true, scroll: false }));
+    b.addEventListener("mouseenter", () => hot(p.id, true));
+    b.addEventListener("mouseleave", () => hot(p.id, false));
+
+    const card = el("div", "card");
+    card.hidden = true;
+    const dl = el("dl");
+    const add = (k, v) => { if (v) dl.append(el("dt", "", k), el("dd", "", v)); };
+    add("Today", p.status.today ? p.status.today.charAt(0).toUpperCase() + p.status.today.slice(1) : "");
+    if (typeof p.rating === "number") add("Rating", p.rating.toFixed(1) + " ★ from " + (p.reviews || 0).toLocaleString() + " reviews on Google");
+    if (p.price) add("Price", "$".repeat(p.price));
+    add("Walk", p.walkMin + " min · " + (p.distanceM >= 1000 ? (p.distanceM / 1000).toFixed(1) + " km" : p.distanceM + " m") + " from home");
+    add("Phone", p.phone);
+    add("Web", p.website ? hostOf(p.website) : "");
+    const actions = el("div", "actions");
+    const go = el("button", "go", "Walk there");
+    go.type = "button";
+    go.addEventListener("click", () => {
+      tell("he wants walking directions to " + p.name + (p.address ? ", " + p.address : "") + " — open them");
+      go.classList.add("sent");
+    });
+    const ask = el("button", "ask", "Ask Vela about it");
+    ask.type = "button";
+    ask.addEventListener("click", () => {
+      tell("he asked about " + p.name + (p.address ? ", " + p.address : "") + " on the map");
+      ask.classList.add("sent");
+    });
+    actions.append(go, ask);
+    if (p.mapsUrl) {
+      // Opened by her, because this page is sandboxed and cannot open a tab.
+      const reviews = el("button", "ask", "Reviews");
+      reviews.type = "button";
+      reviews.addEventListener("click", () => {
+        tell("he wants to read the reviews for " + p.name + " — open " + p.mapsUrl);
+        reviews.classList.add("sent");
+      });
+      actions.append(reviews);
+    }
+    card.append(dl, actions);
+    li.append(b, card);
+    return li;
+  }
+
+  /** Whether this map has any ratings on it, which decides what the numbers mean. */
+  let anyRated = false;
+
+  function renderList() {
+    anyRated = S.places.some((p) => typeof p.rating === "number");
+    document.querySelector(".key").toggleAttribute("data-rated", anyRated);
+    list.replaceChildren(...S.places.map(row));
+    filterList();
+    markSelected();
+  }
+
+  function filterList() {
+    let shown = 0;
+    for (const li of list.children) {
+      const p = S.places.find((x) => x.id === li.dataset.id);
+      const hide = openOnly && p && p.status.open !== true && p.id !== selected;
+      li.hidden = hide;
+      if (!hide) shown++;
+    }
+    const total = S.places.length;
+    $("count").textContent = openOnly ? shown + " of " + total + " open" : total + (total === 1 ? " place" : " places");
+    if (shown) hideEmpty();
+    else if (openOnly && total) showEmpty("Nothing here is open right now.", "Switch to All, or ask her to widen the search.");
+    else showEmpty("Nothing like that around here.", "Ask her to widen the search, or to look somewhere else.");
+  }
+
+  function showEmpty(a, b) {
+    const box = $("empty");
+    box.children[0].textContent = a;
+    box.children[1].textContent = b;
+    box.hidden = false;
+  }
+  function hideEmpty() { $("empty").hidden = true; }
+
+  /* ── Selection: the one gold thing ──────────────────────────────────── */
+  function markSelected() {
+    for (const li of list.children) {
+      const on = li.dataset.id === selected;
+      li.toggleAttribute("data-sel", on);
+      li.querySelector(".place").setAttribute("aria-expanded", String(on));
+      li.querySelector(".card").hidden = !on;
+    }
+  }
+
+  function select(id, { fly = true, scroll = true } = {}) {
+    const was = selected;
+    selected = id && markers.has(id) ? id : null;
+    if (was && was !== selected) refresh(was);
+    if (selected) refresh(selected);
+    markSelected();
+    if (openOnly) { filterList(); for (const m of markers.values()) filterMarker(m); }
+    retag();
+    if (!selected) return;
+    const at = markers.get(selected).marker.getLatLng();
+    if (fly) {
+      const zoom = Math.max(map.getZoom(), 17);
+      if (reduce) map.setView(at, zoom);
+      else map.flyTo(at, zoom, { duration: .7, easeLinearity: .2 });
+    } else if (!map.getBounds().pad(-.12).contains(at)) {
+      map.panTo(at, { animate: !reduce });
+    }
+    if (scroll) {
+      const li = list.querySelector('li[data-id="' + CSS.escape(selected) + '"]');
+      if (li) li.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+    }
+  }
+
+  function hot(id, on) {
+    const m = markers.get(id);
+    const e = m && m.marker.getElement();
+    if (e) e.classList.toggle("hot", on);
+    const li = list.querySelector('li[data-id="' + CSS.escape(id) + '"]');
+    if (li) li.toggleAttribute("data-hot", on);
+  }
+
+  /* ── Framing what she is showing ─────────────────────────────────────── */
+  function frame(s, instant) {
+    // The stage can open or resize without this page hearing about it; measure
+    // the box before fitting anything into it.
+    map.invalidateSize(false);
+    // Frame the places, not the circle: home is on the harbour, and a circle
+    // around it is half water. Home joins the frame when the search is around
+    // it; out along a street it would only drag the view back.
+    const atHome = L.latLng(s.center.lat, s.center.lon).distanceTo([s.home.lat, s.home.lon]) < 60;
+    let bounds = L.latLng(s.center.lat, s.center.lon).toBounds(s.radiusM * 2);
+    if (s.places.length >= 3) {
+      // The nearest 85% of them: one place across the harbour should not
+      // turn half the frame into water.
+      const c = L.latLng(s.center.lat, s.center.lon);
+      const byReach = s.places.map((p) => ({ p, d: c.distanceTo([p.lat, p.lon]) })).sort((a, b) => a.d - b.d);
+      const core = byReach.slice(0, Math.max(3, Math.ceil(byReach.length * .85)));
+      bounds = L.latLngBounds(core.map(({ p }) => [p.lat, p.lon]));
+      if (atHome) bounds.extend([s.home.lat, s.home.lon]);
+    }
+    const opts = { paddingTopLeft: [28, 104], paddingBottomRight: [28, 56], maxZoom: 17 };
+    if (instant || reduce) map.fitBounds(bounds, { ...opts, animate: false });
+    else map.flyToBounds(bounds, { ...opts, duration: .9, easeLinearity: .2 });
+  }
+
+  const moved = (a, b) =>
+    !a || a.radiusM !== b.radiusM || Math.abs(a.center.lat - b.center.lat) > 1e-6 || Math.abs(a.center.lon - b.center.lon) > 1e-6;
+
+  /* ── A new state from her ────────────────────────────────────────────── */
+  function apply(s) {
+    if (!s || !Array.isArray(s.places) || !s.home || !s.center) return;
+    if (S && s.seq <= S.seq) return;
+    const prev = S;
+    S = s;
+    drawHome(s.home);
+    drawStreet(s.street);
+    $("title").textContent = s.title;
+    $("meta").textContent = s.subtitle;
+    document.title = s.title;
+    if (selected && !s.places.some((p) => p.id === selected)) selected = null;
+    const focusing = Boolean(s.focus) && s.focus !== (prev && prev.focus);
+    // Framed before the markers are placed: tagging measures in pixels, and
+    // on the first state there is no view to measure against yet.
+    if (first || (moved(prev, s) && !focusing)) frame(s, first);
+    syncMarkers(s.places);
+    renderList();
+    retag();
+    if (focusing) select(s.focus, { fly: true, scroll: true });
+    first = false;
+  }
+
+  /* ── Controls ────────────────────────────────────────────────────────── */
+  function setOpenOnly(on) {
+    openOnly = on;
+    $("showOpen").setAttribute("aria-pressed", String(on));
+    $("showAll").setAttribute("aria-pressed", String(!on));
+    if (!S) return;
+    filterList();
+    for (const m of markers.values()) filterMarker(m);
+    retag();
+  }
+  $("showOpen").addEventListener("click", () => setOpenOnly(true));
+  $("showAll").addEventListener("click", () => setOpenOnly(false));
+
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && selected) { select(null); return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const rows = [...list.querySelectorAll("li:not([hidden]) .place")];
+    const at = rows.indexOf(document.activeElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const next = rows[Math.max(0, Math.min(rows.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)))];
+    next.focus();
+  });
+
+  /* She speaks to this page only through the hub. */
+  addEventListener("message", (e) => {
+    if (e.source !== parent) return;
+    const s = e.data && e.data.vela_map_state;
+    if (s && typeof s === "object") apply(s);
+  });
+  parent.postMessage({ vela_map: "ready" }, "*");
+})();
+</script>
+</body>
+</html>

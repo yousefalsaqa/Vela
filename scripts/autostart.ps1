@@ -35,25 +35,26 @@ $runner = Join-Path $repo "scripts\vela-service.cmd"
 @"
 @echo off
 cd /d "%~dp0.."
-REM Unprimed base.en cannot produce the name: it decodes "Hello" or drops it
-REM entirely, so the wake word never sees it. A prior of the name alone is the
-REM narrowest fix; the gate in listen.ts still judges what comes back.
+REM Her name is heard by the keyword spotter (scripts\kws_worker.py), not read
+REM out of a transcript. What whisper writes down only has to carry the
+REM question now, so this prior is for cutting "Hey Vela" cleanly off the front
+REM of it, not for deciding whether she was spoken to.
 set VELA_WAKE_VOCABULARY=Vela
 REM A notch looser than the defaults (0.5 / -1.0). Her name is one short word
 REM with no sentence around it to lend it context, so a real one scores worse
-REM than ordinary speech does. Small on purpose: this is the only thing
-REM standing between an open microphone and whisper inventing her name.
+REM than ordinary speech does.
 set VELA_SILENCE=0.55
 set VELA_LOGPROB=-1.15
-REM No wake model. hey_jarvis is the wrong word, and her own, at a threshold
-REM clean enough to trust, answered 2 of 5 clean recordings of the phrase. A
-REM model loaded at all switches the transcript path off, and the transcript
-REM path is the one that works.
-set VELA_WAKE_DETECT=0
-REM So the address is "Hey Vela" rather than "Vela". The bare name is what
-REM base.en writes out of room tone, and each of those is a turn he did not ask
-REM for; a word in front of it is the whole difference.
+REM "Hey Vela", not "Vela". The spotter listens for the whole phrase, and if it
+REM ever fails to load, the transcript path it falls back to needs the lead-in:
+REM the bare name is what base.en writes out of room tone.
 set VELA_WAKE_LEAD=1
+REM Windows audio enhancements are off for this microphone. Acer PurifiedVoice
+REM cut a quiet room to digital zero, and his voice with it unless he leaned
+REM in. Raw, the microphone hisses at about -53 dBFS instead, so the gate's
+REM ceiling goes up to where that hiss lives and the margin over it with it.
+set VELA_WAKE_FLOOR=-45
+set VELA_WAKE_MARGIN=10
 call npm run serve >> "%~dp0..\data\service.log" 2>&1
 "@ | Set-Content -Path $runner -Encoding ascii
 

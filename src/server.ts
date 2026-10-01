@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CoreEvent } from "./core.js";
 import { current, clear, worthRestoring, contentTypeFor, type Screen } from "./screen.js";
+import { isTile, type TileSource } from "./tiles.js";
 
 /**
  * Vela as a local service, so she outlives the window you started her from and
@@ -83,6 +84,20 @@ export interface ServeOptions {
    * button is not offered rather than offered and broken.
    */
   hear?: (audio: Buffer) => Promise<string>;
+  /**
+   * The live map, if she has one. Its changes stream to the hub as "map"
+   * events, which the hub hands to the page on the stage — the page itself
+   * can reach nothing — and a hub that has just opened asks for it here.
+   */
+  map?: {
+    state: () => unknown;
+    onChange: (fn: (state: unknown) => void) => () => void;
+  };
+  /**
+   * The map's tiles, fetched and kept by Vela. Absent, /tiles answers 404
+   * and the map draws its places over a blank sea.
+   */
+  tiles?: TileSource;
   /** Turn her words into a wav the browser can play. Absent means a mute hub. */
   render?: (text: string) => Promise<Buffer | null>;
   /** What is on the screen. Defaults to the real screen module; tests inject. */
@@ -159,6 +174,16 @@ export interface RoomControls {
    * normally.
    */
   cut: () => void;
+  /**
+   * He pressed her: take the next thing he says as said to her.
+   *
+   * The same as saying "Hey Vela" and nothing else, without the saying. In a
+   * room her face used to mute the microphone, and a hub that had not yet
+   * learned it was in one recorded him itself instead — which handed the turn
+   * to the model as typed, past everything the wake word knows about a
+   * conversation, "you can go now" included.
+   */
+  listen?: () => void;
 }
 
 export interface RunningServer {
@@ -209,15 +234,31 @@ export const CUT_OFF =
  * master token out of the page's URL; this keeps whatever the page does hold
  * from leaving. connect-src 'none' closes fetch, XHR and WebSocket;
  * form-action 'none' closes forms; scripts run only inline or from this
- * origin, which is exactly what lets /anime.js load and nothing else. The
- * font hosts are the two the hub itself uses.
+ * origin, which is exactly what lets /anime.js and /leaflet.js load and
+ * nothing else. The font hosts are the two the hub itself uses.
+ *
+ * One widening, for the map: stylesheets from this origin, so /leaflet.css
+ * can load. Images come from this origin too and from nowhere else. The map's
+ * tiles used to load straight from OpenStreetMap, which left one outside host
+ * an image URL could carry data to; OpenStreetMap then started refusing them,
+ * because a sandboxed page cannot say who it is. They come through /tiles now
+ * (see tiles.ts), and the outside host is gone with them. (CARTO's dark tiles
+ * were the first choice; they now answer every request with "API KEY
+ * REQUIRED" painted across the tile.)
  */
 export const SCREEN_CSP =
   "default-src 'none'; script-src 'self' 'unsafe-inline'; " +
-  "style-src 'unsafe-inline' https://fonts.googleapis.com; " +
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
   "font-src data: https://fonts.gstatic.com; " +
-  "img-src data: blob:; media-src data: blob:; " +
+  "img-src 'self' data: blob:; media-src data: blob:; " +
   "connect-src 'none'; form-action 'none'; base-uri 'none'";
+
+/** Public library files the screen may load, by path. See /anime.js below. */
+const VENDORED: Record<string, { file: string; type: string }> = {
+  "/anime.js": { file: "../node_modules/animejs/dist/bundles/anime.umd.min.js", type: "text/javascript" },
+  "/leaflet.js": { file: "../node_modules/leaflet/dist/leaflet.js", type: "text/javascript" },
+  "/leaflet.css": { file: "../node_modules/leaflet/dist/leaflet.css", type: "text/css" },
+};
 
 /** Read a whole request body. Audio is bytes, so this never assumes utf8. */
 function collect(
@@ -248,8 +289,9 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
    * can always read its own URL — so whatever token rides in that URL is a
    * token the page holds. Handing it the master token would hand it POST
    * /turn on an assistant running with bypassPermissions. This one opens
-   * exactly one door, GET /screen/file, and is minted afresh for every show,
-   * so the most a hostile page can steal is permission to re-read itself.
+   * two doors, GET /screen/file and the map tiles under /tiles, and is
+   * minted afresh for every show, so the most a hostile page can steal is
+   * permission to re-read itself and to look at a map of the world.
    * The hub learns it over master-authed channels: the /events frame and
    * GET /screen.
    */
@@ -281,6 +323,12 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
   const authed = (req: { headers: { authorization?: string } }, key: string | null) =>
     req.headers.authorization === `Bearer ${token}` || key === token;
 
+  /** The screen's key, or the master one. What the page on the stage may open. */
+  const screenAuthed = (req: { headers: { authorization?: string } }, query: URLSearchParams) => {
+    const given = query.get("s");
+    return authed(req, query.get("k")) || Boolean(given && screenToken && given === screenToken);
+  };
+
   const server: Server = createServer((req, res) => {
     // Parsed once; every route below reads from the same parse.
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -292,28 +340,25 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
     // no token at all, because the sandboxed screen pages that want it for
     // motion have no token to give — and a public copy of a public library
     // guards nothing.
-    if (req.method === "GET" && path === "/anime.js") {
+    if (req.method === "GET" && VENDORED[path]) {
+      const { file, type } = VENDORED[path];
       try {
-        const bundle = resolve(here, "../node_modules/animejs/dist/bundles/anime.umd.min.js");
-        res.writeHead(200, {
-          "content-type": "text/javascript; charset=utf-8",
-          "cache-control": "max-age=86400",
-        });
-        res.end(readFileSync(bundle));
+        const bundle = readFileSync(resolve(here, file));
+        res.writeHead(200, { "content-type": `${type}; charset=utf-8`, "cache-control": "max-age=86400" });
+        res.end(bundle);
       } catch {
-        // The page checks for it and falls back to no motion rather than
-        // throwing on every animate() call.
+        // The page checks for it and falls back rather than throwing: no
+        // motion without anime.js, a plain message without Leaflet.
         res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "anime.js is not installed" }));
+        res.end(JSON.stringify({ error: `${path.slice(1)} is not installed` }));
       }
       return;
     }
 
-    // The one door the screen's own key opens: the file currently being
-    // shown, and nothing else. The master token also works, for curl.
+    // The first door the screen's own key opens: the file currently being
+    // shown. The master token also works, for curl.
     if (req.method === "GET" && path === "/screen/file") {
-      const given = query.get("s");
-      if (!authed(req, query.get("k")) && !(given && screenToken && given === screenToken)) {
+      if (!screenAuthed(req, query)) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "bad or missing token" }));
         return;
@@ -337,6 +382,36 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "the shown file is gone from disk" }));
       }
+      return;
+    }
+
+    // The second, and the last: the map's tiles, which Vela fetches so the
+    // page does not have to (tiles.ts says why). Behind the screen's key
+    // rather than open like /leaflet.js, because this route goes out to the
+    // internet on its caller's behalf, and any page in his browser can point
+    // an <img> at this port. Only the page she is showing gets to ask.
+    const tile = /^\/tiles\/(\d+)\/(\d+)\/(\d+)\.png$/.exec(path);
+    if (req.method === "GET" && tile) {
+      if (!screenAuthed(req, query)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "bad or missing token" }));
+        return;
+      }
+      const [z, x, y] = tile.slice(1).map(Number);
+      if (!opts.tiles || !isTile(z, x, y)) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: opts.tiles ? "no such tile" : "no map tiles here" }));
+        return;
+      }
+      const failed = () => {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "OpenStreetMap did not send that tile" }));
+      };
+      opts.tiles(z, x, y).then((png) => {
+        if (!png) return failed();
+        res.writeHead(200, { "content-type": "image/png", "cache-control": "private, max-age=86400" });
+        res.end(png);
+      }, failed);
       return;
     }
 
@@ -408,6 +483,24 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
             : null,
         }),
       );
+      return;
+    }
+
+    // What the map is showing now, for a hub that opened after it changed.
+    if (req.method === "GET" && path === "/map/state") {
+      if (!authed(req, query.get("k"))) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorised" }));
+        return;
+      }
+      const state = opts.map?.state() ?? null;
+      if (!state) {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(state));
       return;
     }
 
@@ -483,7 +576,7 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
         return;
       }
       collect(req, (body) => {
-        let wanted: { hearing?: unknown; speaking?: unknown; stop?: unknown } = {};
+        let wanted: { hearing?: unknown; speaking?: unknown; stop?: unknown; listen?: unknown } = {};
         try {
           wanted = JSON.parse(body.toString("utf8") || "{}") as typeof wanted;
         } catch {
@@ -499,6 +592,9 @@ export function serve(opts: ServeOptions): Promise<RunningServer> {
         // typo cannot mute a microphone by accident.
         if (typeof wanted.hearing === "boolean") room.setHearing(wanted.hearing);
         if (typeof wanted.speaking === "boolean") room.setSpeaking(wanted.speaking);
+        // After the toggles: pressing her is asking to be heard, so it has to
+        // land on a microphone that a body unmuting it has already turned on.
+        if (wanted.listen === true) room.listen?.();
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ hearing: room.hearing(), speaking: room.speaking() }));
       });
@@ -641,6 +737,9 @@ ${text}` : text);
     }
   };
 
+  // Every change to the map, as it happens: the page moves, it is not rebuilt.
+  const offMap = opts.map?.onChange((state) => broadcast({ type: "map", state })) ?? (() => {});
+
   return new Promise((fulfil) => {
     // A fixed port is what makes her address permanent, and it is also the one
     // thing that could stop her coming up at boot. If something already holds
@@ -668,6 +767,7 @@ ${text}` : text);
         close: () =>
           new Promise<void>((done) => {
             unsubscribe();
+            offMap();
             for (const c of clients) {
               try {
                 c.end();

@@ -13,9 +13,38 @@ import {
 } from "./memory.js";
 import { launchApp, mediaKey, listRunningApps, captureScreen } from "./desktop.js";
 import { searchHistory, ago } from "./history.js";
-import { present, clear } from "./screen.js";
+import { present, clear, current } from "./screen.js";
 import { captureFile } from "./paths.js";
+import { places, type Kind } from "./places.js";
+import { showPicture } from "./picture.js";
+import { express, FACES, CAPTION_MAX } from "./face.js";
+import { askForWork } from "./work.js";
+import { voices } from "./voices.js";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** The map page. Written once; every search moves it rather than replacing it. */
+export const MAP_PAGE = fileURLToPath(new URL("./map.html", import.meta.url));
+
+/**
+ * Run a map change and make sure the map is what the stage is showing.
+ *
+ * Put up only when something else is showing: presenting it again would mint
+ * a new screen and reload the page, which is the "new map" he asked for this
+ * not to be. A failure is a sentence for the model, not a throw.
+ */
+async function onTheMap(change: () => Promise<string>): Promise<ReturnType<typeof text>> {
+  try {
+    const said = await change();
+    if (places().state() && current()?.path !== MAP_PAGE) present({ title: "Places", path: MAP_PAGE });
+    return text(said);
+  } catch (err) {
+    return text(
+      `The map search failed (${(err as Error).message}). OpenStreetMap may be slow; ` +
+        `say so in a line and offer to try again.`,
+    );
+  }
+}
 
 const text = (body: string) => ({
   content: [{ type: "text" as const, text: body }],
@@ -242,11 +271,180 @@ export const velaToolDefs = [
     ),
 
     tool(
+      "find_places",
+      "Find places near Yousef and show them on a live map on his screen: " +
+        "somewhere to eat, coffee, a bar, something sweet, groceries, a pharmacy. " +
+        "This is how to answer 'where can I eat', 'coffee near me', 'what's open " +
+        "on Princess Street' — it searches OpenStreetMap around his home " +
+        "or around a street or place he names, and marks " +
+        "each result with its walking time from his door and whether it is open " +
+        "now. The answer is not in his files: never search his projects for " +
+        "places. The map stays up, so when he refines — 'wider', 'further down', " +
+        "'closer', 'that one' — use map_view, not another search. Say one short " +
+        "line; the map carries the list. For reviews, menus or prices of one " +
+        "place, look it up on the web afterwards.",
+      {
+        what: z
+          .enum(["food", "restaurant", "fast_food", "cafe", "bar", "dessert", "groceries", "pharmacy"])
+          .describe("food = anywhere to eat; dessert = ice cream, bakeries, sweets."),
+        cuisine: z
+          .string()
+          .optional()
+          .describe("A cuisine or dish to narrow to, e.g. 'sushi', 'pizza', 'shawarma'. Leave out for anything."),
+        near: z
+          .string()
+          .optional()
+          .describe("Search here instead of home: a street ('Princess Street') or a place ('Queen's campus')."),
+        radius_m: z
+          .number()
+          .optional()
+          .describe("How far to look, in metres. Leave out: a 15-minute walk, or a stretch of the street."),
+      },
+      async (args) =>
+        onTheMap(() =>
+          places().find({ what: args.what as Kind, cuisine: args.cuisine, near: args.near, radiusM: args.radius_m }),
+        ),
+      // Loaded with the prompt rather than found by tool search: the search
+      // was a model round trip — 1.2 to 2.3s — in front of the first map of
+      // every session, which is a spoken question he is waiting on.
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "map_view",
+      "Change the map already on his screen, in place — it moves; it is never " +
+        "rebuilt. expand: look wider ('expand the search'). closer: tighten in. " +
+        "move: slide the view; on a street, direction 'further' carries on away " +
+        "from home ('go further down the street') and 'back' returns, or give a " +
+        "compass direction and optional meters. focus: pick out one place by " +
+        "name or list number ('that one', 'the third one', 'tell me about Chit " +
+        "Chat') and open its card. home: back to around his door.",
+      {
+        action: z.enum(["expand", "closer", "move", "focus", "home"]),
+        direction: z
+          .string()
+          .optional()
+          .describe("For move: 'further', 'back', or north, south, east, west, northeast…"),
+        meters: z.number().optional().describe("For move: how far. Leave out for about one view's width."),
+        place: z.string().optional().describe("For focus: the place's name, part of it, or its number in the list."),
+      },
+      async (args) =>
+        onTheMap(() =>
+          places().view({ action: args.action, direction: args.direction, meters: args.meters, place: args.place }),
+        ),
+      { alwaysLoad: true },
+    ),
+
+    tool(
       "clear_screen",
       "Take the current page off your screen. Use when he asks for it to go, " +
         "or when what's showing stopped being relevant to the conversation.",
       {},
       async () => text(clear()),
+    ),
+
+    tool(
+      "show_picture",
+      "Put a picture card on your screen: the real photograph of a thing, " +
+        "what Wikipedia says it is, and the facts you choose, laid out in your " +
+        "colours. Use it whenever the conversation turns to something that " +
+        "exists and has a look — a famous project, a machine, a building, a " +
+        "vehicle, a place, an artwork, a person — whether or not he asked to " +
+        "see it. It takes seconds because it writes no page: give `subject` as " +
+        "its Wikipedia article title or close to it, and the card fetches the " +
+        "photo and summary itself. Add the few facts and dates that matter, " +
+        "from what you know or just looked up, not every one you have. For a " +
+        "mechanism or an idea that has no photograph, draw it with " +
+        "show_screen instead. Say one line; the card carries the rest.",
+      {
+        subject: z.string().describe("Its Wikipedia title, or near it: 'James Webb Space Telescope', 'Apollo 11'."),
+        title: z.string().optional().describe("A heading other than the article's title, if it reads better."),
+        facts: z
+          .array(z.object({ label: z.string(), value: z.string() }))
+          .optional()
+          .describe("Up to 8 short pairs: { label: 'Mirror', value: '6.5 m, 18 segments' }."),
+        timeline: z
+          .array(z.object({ when: z.string(), what: z.string() }))
+          .optional()
+          .describe("Up to 8 moments in order: { when: '2021', what: 'Launched on Ariane 5' }."),
+        image_url: z
+          .string()
+          .optional()
+          .describe("A direct link to a better image than Wikipedia's lead photo, if you found one."),
+        caption: z.string().optional().describe("A line under the photo: what he is looking at."),
+      },
+      async (args) =>
+        text(
+          await showPicture({
+            subject: args.subject,
+            title: args.title,
+            facts: args.facts,
+            timeline: args.timeline,
+            imageUrl: args.image_url,
+            caption: args.caption,
+          }),
+        ),
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "remember_voice",
+      "Save the voiceprint of the new voice you are talking to, under their name, so " +
+        "you know them by voice from now on. Only after they themselves said yes to " +
+        "you saving it. Use the name they gave you.",
+      { name: z.string().describe("What they said to call them: 'Sarah'.") },
+      async (args) => {
+        const live = voices();
+        if (!live) return text("Voices aren't on right now, so there is nothing to save it with. Say so.");
+        return text(live.remember(args.name));
+      },
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "forget_voice",
+      "Delete a saved voiceprint, when the person asks you to forget their voice.",
+      { name: z.string().describe("The name it was saved under.") },
+      async (args) => {
+        const live = voices();
+        if (!live) return text("Voices aren't on right now. Say so.");
+        return text(live.forget(args.name));
+      },
+    ),
+
+    tool(
+      "get_to_work",
+      "Move this turn to your stronger model. Spoken turns run on a fast one so " +
+        "talking feels like talking; that is wrong for real work. Call this first, " +
+        "before anything else, when what he said out loud is work: writing or " +
+        "changing code, debugging, a build, a review, research that needs " +
+        "judgement rather than a lookup. Not for lunch, the time, the map, a " +
+        "picture, a quick fact. Typed turns are already on the strong model.",
+      { why: z.string().describe("A few words: 'fixing the failing wake tests'.") },
+      async (args) => {
+        askForWork(args.why);
+        return text("On your stronger model for the rest of this turn.");
+      },
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "react",
+      "Pull a face on his screen for a few seconds, over the conversation, " +
+        "then it goes by itself. A reaction, not a picture: deadpan (-_-) when " +
+        "he says something daft or obvious, side-eye when he is up to " +
+        "something, laugh when he is actually funny, surprised, thinking, " +
+        "wince when something went badly, smug when you were right, happy. " +
+        "Use it where a person's face would move, which is rarely: a face on " +
+        "every turn is a tic. It replaces nothing on the stage. The caption is " +
+        "a word or two ('bruh.'), and the spoken reply still happens — often " +
+        "the face is the joke and the line is short.",
+      {
+        face: z.enum(FACES),
+        caption: z.string().optional().describe(`A word or two under it, ${CAPTION_MAX} characters at most.`),
+      },
+      async (args) => text(express(args.face, args.caption)),
+      { alwaysLoad: true },
     ),
 
     tool(

@@ -227,6 +227,13 @@ export interface SpeakerHandle {
   cut?: () => void;
   /** Resolve once everything queued has actually been said. */
   drain?: (timeoutMs?: number) => Promise<void>;
+  /** Get the player running now, ahead of a reply. See PcmPlayer.open. */
+  open?: () => void;
+  /**
+   * Render these lines now, so that saying one later costs nothing. Keyed on
+   * the exact text that will be handed to speak().
+   */
+  prime?: (lines: string[]) => Promise<void>;
 }
 
 export interface Voice {
@@ -424,8 +431,28 @@ export interface PcmPlayer {
   drain: (timeoutMs?: number) => Promise<void>;
   /** Kill what is sounding now; the next write starts a fresh player. */
   cut: () => void;
+  /**
+   * Start the player now, because a reply is on its way.
+   *
+   * ffplay takes about 450ms to come up, and it used to be started by the
+   * first sentence — so that sentence paid for it, in front of him, every
+   * turn. Opened while the model is still thinking, the cost is paid in a
+   * wait that was happening anyway. A no-op if one is already running.
+   */
+  open: () => void;
   stop: () => void;
 }
+
+/**
+ * What an opened player is handed before there is anything to say: enough to
+ * make ffplay open the audio device now rather than on the first sentence.
+ *
+ * Measured on his machine, not guessed. 40ms was too little: ffplay came up,
+ * never started its audio stream, and swallowed everything written to it
+ * afterwards — the log said she spoke and the room heard only the chime. Half
+ * a second starts it properly, and audio written seconds later still plays.
+ */
+const OPEN_PRIME_MS = 500;
 
 /**
  * One player for the whole conversation, fed raw samples down a pipe.
@@ -510,6 +537,12 @@ export function pcmPlayer(opts: {
    * there is the next thing she has to say.
    */
   let closing: Promise<void> | null = null;
+  /**
+   * Whether anything has been said on the player that is running. Not the
+   * same as the player running: an opened one runs before the first sentence,
+   * and that sentence still must not get a pause in front of it.
+   */
+  let spoken = false;
 
   const start = (): ChildProcess => {
     const p = spawn(
@@ -542,14 +575,19 @@ export function pcmPlayer(opts: {
       if (stopped || !pcm.length) return;
       if (closing) await closing;
       if (stopped) return;
-      // The player runs for the length of a turn, so a pipe that is already
-      // open means this is not her first sentence and the one before it ended
-      // flush against this one.
-      const midTurn = proc !== null;
+      // Something already said on this player means this is not her first
+      // sentence, and the one before it ended flush against this one.
+      const midTurn = proc !== null && spoken;
       const pause = thisGap ?? gapMs;
       const stdin = (proc ?? start()).stdin;
       if (midTurn && pause > 0) stdin?.write(silence(pause, rate));
       stdin?.write(pcm);
+      spoken = true;
+    },
+
+    open() {
+      if (stopped || proc || closing) return;
+      start().stdin?.write(silence(OPEN_PRIME_MS, rate));
     },
 
     async drain(timeoutMs = 30_000) {
@@ -560,6 +598,7 @@ export function pcmPlayer(opts: {
       // length of the wait, so a write that lands inside it queues behind the
       // tail instead of talking over it.
       proc = null;
+      spoken = false;
       const wait = (async () => {
         p.stdin?.end();
         await Promise.race([
@@ -588,6 +627,7 @@ export function pcmPlayer(opts: {
     cut() {
       const p = proc;
       proc = null;
+      spoken = false;
       // Nothing to queue behind: the tail this would have waited for is the
       // audio being ended. Leaving it set would make the next sentence wait
       // on a drain whose player is already dead.
@@ -779,6 +819,14 @@ export function synthSpeaker(opts: {
     spawn: opts.spawn,
   });
 
+  /**
+   * Lines rendered before they were needed: her acknowledgements, her
+   * goodbyes, the "one sec" that covers the model's wait. Even warm, Kokoro
+   * takes 0.2-0.3s a line, and for a canned line that is the whole of the
+   * silence it exists to fill.
+   */
+  const rendered = new Map<string, Buffer>();
+
   const utter = async (text: string) => {
     if (stopped) return;
     // Which turn this sentence belongs to. Rendering takes about half a
@@ -786,12 +834,15 @@ export function synthSpeaker(opts: {
     // Kokoro; without this the sentence he interrupted arrives afterwards and
     // plays into a room he has just silenced.
     const mine = epoch;
-    const wav = await opts.render(text);
-    if (stopped || !wav || mine !== epoch) return;
-    const pcm = pcmFromWav(wav);
+    let pcm = rendered.get(text) ?? null;
     if (!pcm) {
-      complain("the renderer sent back something that isn't a wav");
-      return;
+      const wav = await opts.render(text);
+      if (stopped || !wav || mine !== epoch) return;
+      pcm = pcmFromWav(wav);
+      if (!pcm) {
+        complain("the renderer sent back something that isn't a wav");
+        return;
+      }
     }
     player.write(pcm, gapFor(text, opts.gapMs ?? 0));
     // How long this sentence actually lasts, from the samples themselves:
@@ -816,6 +867,19 @@ export function synthSpeaker(opts: {
       // is about to be appended to.
       epoch++;
       player.cut();
+    },
+    open() {
+      if (!stopped) player.open();
+    },
+    async prime(lines: string[]) {
+      // One at a time, and never over anything real: Kokoro is a single
+      // worker, and a line he is waiting on must not queue behind these.
+      for (const line of lines) {
+        if (stopped || rendered.has(line)) continue;
+        const wav = await opts.render(line).catch(() => null);
+        const pcm = wav ? pcmFromWav(wav) : null;
+        if (pcm) rendered.set(line, pcm);
+      }
     },
     async drain(timeoutMs = 30_000) {
       await Promise.race([queue, new Promise((r) => setTimeout(r, timeoutMs).unref?.())]);

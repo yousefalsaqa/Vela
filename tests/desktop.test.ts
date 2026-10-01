@@ -41,10 +41,14 @@ describe("q", () => {
 
 describe("resolveTarget", () => {
   test("maps a known alias", () => {
-    assert.deepEqual(resolveTarget("netflix"), {
-      key: "netflix",
-      resolved: "netflix://",
+    assert.deepEqual(resolveTarget("spotify"), {
+      key: "spotify",
+      resolved: "spotify:",
     });
+  });
+
+  test("netflix goes straight to the web, because the Store app fails silently", () => {
+    assert.equal(resolveTarget("netflix").resolved, "https://www.netflix.com");
   });
 
   test("is case and whitespace insensitive", () => {
@@ -79,14 +83,14 @@ describe("launchApp", () => {
 
   test("falls back to the web version when the protocol handler is missing", async () => {
     const { calls, exec } = spy(async (cmd) => {
-      if (cmd.includes("netflix://")) throw new Error("no handler");
+      if (cmd.includes("spotify:")) throw new Error("no handler");
       return "";
     });
-    const out = await launchApp("netflix", exec);
+    const out = await launchApp("spotify", exec);
     assert.match(out, /opened the web version instead/);
     assert.deepEqual(calls, [
-      "Start-Process 'netflix://'",
-      "Start-Process 'https://www.netflix.com'",
+      "Start-Process 'spotify:'",
+      "Start-Process 'https://open.spotify.com'",
     ]);
   });
 

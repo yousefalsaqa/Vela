@@ -1,6 +1,8 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { velaTools } from "./tools.js";
 import { onScreen, type ScreenMeta } from "./screen.js";
+import { onFace, type Expression } from "./face.js";
+import { onWork } from "./work.js";
 import { store as defaultStore, type Store } from "./memory.js";
 import { startHeartbeat, type Heartbeat } from "./ambient.js";
 import { startTriggers } from "./triggers.js";
@@ -27,6 +29,8 @@ export type CoreEvent =
   | { type: "say"; text: string }
   /** She put something on the screen (or took it down: null). */
   | { type: "show"; screen: ScreenMeta | null }
+  /** She pulled a face. The hub draws it over the conversation for a moment. */
+  | { type: "face"; expression: Expression }
   | { type: "error"; message: string };
 
 export type Listener = (event: CoreEvent) => void;
@@ -34,6 +38,8 @@ export type Listener = (event: CoreEvent) => void;
 /** The subset of the SDK's Query that the core actually uses. */
 export interface Session extends AsyncIterable<unknown> {
   close: () => void;
+  /** Change the model for the requests that follow. The real SDK session has it. */
+  setModel?: (model?: string) => Promise<void>;
 }
 export type SessionFactory = (turns: AsyncGenerator<UserTurn>) => Session;
 
@@ -47,8 +53,18 @@ export interface CoreOptions {
   /** 0 disables the heartbeat and, with it, triggers. */
   heartbeatMs?: number;
   heartbeatModel?: string;
-  /** Undefined leaves the SDK on its own default. */
+  /** Undefined leaves the SDK on its own default. The model for work. */
   model?: string;
+  /**
+   * The model for a spoken turn. Undefined keeps every turn on `model`. See
+   * TALK_MODEL in config.ts.
+   */
+  talkModel?: string;
+  /**
+   * The built-in tools the session is given. Undefined is all of them. See
+   * BUILTIN_TOOLS in config.ts for what they cost.
+   */
+  tools?: string[];
   thinking?: boolean;
   /** How hard she works a turn. See sessionOptions for why this has to be set. */
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
@@ -63,11 +79,19 @@ export interface CoreOptions {
    */
   heartbeat?: typeof startHeartbeat;
   triggers?: typeof startTriggers;
+  /**
+   * Something went wrong that costs her speed rather than the turn, so it is
+   * said here and not as an error event: an error ends a spoken turn.
+   */
+  onProblem?: (why: string) => void;
 }
 
 export interface Core {
-  /** Hand the assistant a turn. */
-  send: (text: string) => void;
+  /**
+   * Hand the assistant a turn. `spoken` when he said it out loud rather than
+   * typed it, which is what decides the model when talkModel is set.
+   */
+  send: (text: string, how?: { spoken?: boolean }) => void;
   /** Listen for everything it does. Returns an unsubscribe function. */
   subscribe: (listener: Listener) => () => void;
   /** True while a turn is in flight — the heartbeat waits for this. */
@@ -94,7 +118,13 @@ export function sessionOptions(opts: CoreOptions): Record<string, unknown> {
     // itself, skill-creator writes files. The list is discovered at startup in
     // config.ts, so one she wrote for herself is hers on the next start.
     ...(opts.skills?.length ? { skills: opts.skills } : {}),
+    ...(opts.tools ? { tools: opts.tools } : {}),
     ...(opts.model ? { model: opts.model } : {}),
+    // Two things his Claude Code has that she should not. His claude.ai
+    // connectors (Claude Docs: tools and instructions she never uses), and
+    // Claude Code's memory of this repo, which is notes about building her,
+    // written for the agent that builds her, not for her.
+    env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
     // Thinking off is what keeps a spoken turn under two seconds, and the
     // effort has to come with it. The SDK inherits effortLevel from Claude
     // Code's settings.json, and xhigh with thinking disabled is refused
@@ -162,6 +192,39 @@ export function createCore(opts: CoreOptions): Core {
       }) as unknown as Session);
 
   let session = makeSession(turns.stream());
+
+  /**
+   * The model the session is on now. A session starts on `model`; a spoken
+   * turn moves it to talkModel and a typed one moves it back. Undefined is the
+   * SDK's own default, which is also what `model` unset means.
+   */
+  let onModel: string | undefined = opts.model;
+  /**
+   * Change model before the next request, if it is not already the one.
+   *
+   * The switch is recorded only once the session has taken it. It used to be
+   * recorded first and its failure swallowed, and on 2026-10-01 that was every
+   * spoken turn of the day: the SDK's bundled Claude Code did not know
+   * claude-sonnet-5-5, refused the switch, and she answered "how's it going"
+   * on Opus at three seconds a time while believing she was on Sonnet. Left
+   * unrecorded, the next spoken turn tries again, and the failure is said.
+   */
+  let refused = "";
+  const useModel = (want: string | undefined): Promise<void> => {
+    if (want === onModel || !session.setModel) return Promise.resolve();
+    return session.setModel(want).then(
+      () => {
+        onModel = want;
+      },
+      (err: Error) => {
+        // The turn still goes, on whichever model the session is on. A switch
+        // that failed must not cost him the answer. Said once per reason.
+        const why = `couldn't move her to ${want ?? "the default model"} (${err?.message ?? err})`;
+        if (why !== refused) opts.onProblem?.(why);
+        refused = why;
+      },
+    );
+  };
 
   let busy = false;
   let streamedThisTurn = false;
@@ -271,6 +334,7 @@ export function createCore(opts: CoreOptions): Core {
       turns.end();
       turns = createTurnQueue();
       session = makeSession(turns.stream());
+      onModel = opts.model;
     }
   })();
 
@@ -296,9 +360,16 @@ export function createCore(opts: CoreOptions): Core {
   // The show_screen tool talks to the screen module; faces hear about it
   // through the same stream everything else arrives on.
   const offScreen = onScreen((screen) => emit({ type: "show", screen }));
+  const offFace = onFace((expression) => emit({ type: "face", expression }));
+  // A spoken turn that turned out to be real work: the rest of it goes to the
+  // strong model. The next spoken turn goes back to talking.
+  const offWork = onWork(() => {
+    if (opts.talkModel === undefined) return;
+    void useModel(opts.model);
+  });
 
   return {
-    send(text: string) {
+    send(text: string, how: { spoken?: boolean } = {}) {
       if (stopped) return;
       busy = true;
       streamedThisTurn = false;
@@ -306,7 +377,15 @@ export function createCore(opts: CoreOptions): Core {
       toolsThisTurn = 0;
       // A turn he started is allowed its own one nudge.
       pushedThisTurn = false;
-      turns.send(text);
+      if (opts.talkModel === undefined) {
+        turns.send(text);
+        return;
+      }
+      // The switch is a request to the session, so the turn waits for it: sent
+      // first, the turn would be answered by the model it was meant to leave.
+      void useModel(how.spoken ? opts.talkModel : opts.model).then(() => {
+        if (!stopped) turns.send(text);
+      });
     },
 
     subscribe(listener: Listener) {
@@ -319,6 +398,8 @@ export function createCore(opts: CoreOptions): Core {
     stop() {
       stopped = true;
       offScreen();
+      offFace();
+      offWork();
       stopTriggers();
       heartbeat?.stop();
       turns.end();

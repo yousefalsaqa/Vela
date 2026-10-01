@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { openDetector } from "../src/detect.js";
+import { openDetector, openSpotter } from "../src/detect.js";
 import { fakeSpawner, settle } from "./helpers/proc.js";
 
 /**
@@ -132,5 +132,65 @@ describe("openDetector", () => {
     h.fake.last().proc.close();
     await settle();
     assert.deepEqual(h.problems, []);
+  });
+});
+
+describe("the fire, the spotter, and knowing it loaded", () => {
+  test("everyone listening hears a detection the moment it arrives", async () => {
+    // The chime is the worker's, but the window, the models paging in and the
+    // filler all hang off this — none of them can wait for a transcript.
+    const fake = fakeSpawner();
+    const detector = openDetector({ python: "python.exe", worker: "wake_worker.py", model: "m", spawn: fake.spawn });
+    const a: number[] = [];
+    const b: number[] = [];
+    detector.onFire((s) => a.push(s));
+    detector.onFire((s) => b.push(s));
+    fake.last().proc.say("wake 0.810");
+    await settle();
+    assert.deepEqual([a, b], [[0.81], [0.81]]);
+  });
+
+  test("the spotter's line carries the phrase after the number, and the number still reads", async () => {
+    // A spotter has no score, so it says "wake 1 HEY_VELA". Number() of that
+    // whole tail is NaN; the detection must still count.
+    const fake = fakeSpawner();
+    const detector = openSpotter({ python: "python.exe", worker: "kws_worker.py", model: "dir", phrases: ["hey vela"], spawn: fake.spawn });
+    const heard: number[] = [];
+    detector.onFire((s) => heard.push(s));
+    fake.last().proc.say("wake 1 HEY_VELA");
+    await settle();
+    assert.deepEqual(heard, [1]);
+  });
+
+  test("the spotter is started with exactly what it was configured with", () => {
+    const fake = fakeSpawner();
+    openSpotter({
+      python: "python.exe",
+      worker: "kws_worker.py",
+      model: "C:/kws",
+      phrases: ["hey vela", "hey vella"],
+      boost: 3,
+      trigger: 0.15,
+      gainDb: 20,
+      chime: "off",
+      spawn: fake.spawn,
+    });
+    assert.deepEqual(fake.last().args, ["kws_worker.py", "C:/kws", "hey vela,hey vella", "3", "0.15", "20", "off"]);
+  });
+
+  test("ready says whether the model came up, because a dead one kept would deafen her", async () => {
+    // A detector that is present switches the transcript path off. One that
+    // never loaded and was kept anyway is an assistant that cannot hear her
+    // name at all, so the caller has to be told which it got.
+    const up = fakeSpawner();
+    const good = openDetector({ python: "p", worker: "w", model: "m", spawn: up.spawn });
+    up.last().proc.say("ready");
+    assert.equal(await good.ready, true);
+
+    const down = fakeSpawner();
+    const bad = openDetector({ python: "p", worker: "w", model: "m", spawn: down.spawn });
+    down.last().proc.say("err no module named sherpa_onnx");
+    down.last().proc.close(1);
+    assert.equal(await bad.ready, false);
   });
 });

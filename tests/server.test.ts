@@ -9,10 +9,12 @@ import {
   hubUrl,
   HUB_FILE,
   CUT_OFF,
+  SCREEN_CSP,
   type RunningServer,
   type ServableCore,
   type RoomControls,
 } from "../src/server.js";
+import { TILE_HOST } from "../src/tiles.js";
 import { connect, reachable, parseFrames } from "../src/client.js";
 import type { CoreEvent } from "../src/core.js";
 import { present, clear as clearScreen, type Screen } from "../src/screen.js";
@@ -1060,13 +1062,19 @@ describe("the room, as the hub drives it", () => {
   let hearing = true;
   let speaking = true;
   let cuts = 0;
+  /** What the room was told, in order, for the tests where order is the claim. */
+  let told: string[] = [];
 
   const room: RoomControls = {
     hearing: () => hearing,
-    setHearing: (on) => (hearing = on),
+    setHearing: (on) => {
+      hearing = on;
+      told.push(on ? "unmuted" : "muted");
+    },
     speaking: () => speaking,
     setSpeaking: (on) => (speaking = on),
     cut: () => (cuts += 1),
+    listen: () => told.push("listen"),
   };
 
   const call = (path: string, init: RequestInit = {}) =>
@@ -1084,6 +1092,7 @@ describe("the room, as the hub drives it", () => {
     hearing = true;
     speaking = true;
     cuts = 0;
+    told = [];
     running = await serve({
       core: fakeCore().core,
       endpointFile: join(dir, "server.json"),
@@ -1164,6 +1173,24 @@ describe("the room, as the hub drives it", () => {
     const res = await call("/room", { method: "POST", body: "not json" });
     assert.equal(res.status, 400);
     assert.equal(hearing, true);
+  });
+
+  test("pressing her asks the room to take the next thing he says", async () => {
+    await set({ listen: true });
+    assert.deepEqual(told, ["listen"]);
+  });
+
+  test("a press that also unmutes him lands on a microphone that is already on", async () => {
+    // Listening on a muted microphone opens a conversation she cannot hear,
+    // which from his side is pressing her and being ignored.
+    hearing = false;
+    await set({ hearing: true, listen: true });
+    assert.deepEqual(told, ["unmuted", "listen"]);
+  });
+
+  test("only a real true opens a conversation, the same bar as the other switches", async () => {
+    await set({ listen: "yes" });
+    assert.deepEqual(told, []);
   });
 });
 
@@ -1266,5 +1293,83 @@ describe("the URL she opens, held against the page it opens", () => {
       hubUrl({ ...endpoint }),
       "anything per-window in this URL is a link he cannot pin, which is what the durable token exists to give him",
     );
+  });
+});
+
+describe("the live map", () => {
+  let dir: string;
+  let running: RunningServer;
+  const listeners = new Set<(state: unknown) => void>();
+  let current: unknown = null;
+  const map = {
+    state: () => current,
+    onChange: (fn: (state: unknown) => void) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+  const at = (p: string) => `http://127.0.0.1:${running.endpoint.port}${p}`;
+  const auth = () => ({ authorization: `Bearer ${running.endpoint.token}` });
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "vela-map-"));
+    current = null;
+    running = await serve({ core: fakeCore().core, endpointFile: join(dir, "server.json"), map });
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("serves Leaflet and its stylesheet from this machine, with no token, as it does anime.js", async () => {
+    // The map page runs sandboxed on the stage and has no token to present;
+    // a public copy of a public library guards nothing.
+    const js = await fetch(at("/leaflet.js"));
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get("content-type") ?? "", /javascript/);
+    const css = await fetch(at("/leaflet.css"));
+    assert.equal(css.status, 200);
+    assert.match(css.headers.get("content-type") ?? "", /text\/css/);
+  });
+
+  test("what the map shows is behind the master token", async () => {
+    assert.equal((await fetch(at("/map/state"))).status, 401);
+  });
+
+  test("before any search there is no map, and that is an answer rather than an error", async () => {
+    assert.equal((await fetch(at("/map/state"), { headers: auth() })).status, 204);
+  });
+
+  test("a hub that opens after a search is handed the map as it stands", async () => {
+    current = { seq: 3, title: "Food near home" };
+    const res = await fetch(at("/map/state"), { headers: auth() });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { seq: 3, title: "Food near home" });
+  });
+
+  test("every change reaches the hub as it happens, so the page moves rather than reloads", async () => {
+    const client = await connect(running.endpoint);
+    const seen: unknown[] = [];
+    client.subscribe((e) => seen.push(e));
+    for (const fn of listeners) fn({ seq: 4, title: "Food on Princess Street" });
+    await until(() => seen.length === 1, "the map event");
+    assert.deepEqual(seen[0], { type: "map", state: { seq: 4, title: "Food on Princess Street" } });
+    client.stop();
+  });
+
+  test("a closed server stops listening to the map", async () => {
+    await running.close();
+    assert.equal(listeners.size, 0, "or every restart would add another listener that writes to nobody");
+    running = await serve({ core: fakeCore().core, endpointFile: join(dir, "server.json"), map });
+  });
+
+  test("the screen may load map tiles from one host, and still reach nothing else", () => {
+    // An image URL can carry data out, so the tile host is the only image
+    // host, and fetch stays shut: the page learns its state from the hub.
+    assert.match(SCREEN_CSP, new RegExp(`img-src data: blob: ${TILE_HOST.replace(/[.*]/g, "\$&")};`));
+    assert.equal(TILE_HOST, "https://tile.openstreetmap.org");
+    assert.match(SCREEN_CSP, /connect-src 'none'/);
+    assert.match(SCREEN_CSP, /style-src 'self' 'unsafe-inline'/, "'self' is what lets /leaflet.css load");
   });
 });

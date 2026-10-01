@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { velaToolDefs } from "../src/tools.js";
+import { useVoices } from "../src/voices.js";
 import { current } from "../src/screen.js";
 
 // The tool handlers go through the default store, so point it at a throwaway
@@ -38,15 +39,22 @@ describe("tool surface", () => {
         "browser_history",
         "capture_screen",
         "clear_screen",
+        "find_places",
         "forget",
+        "forget_voice",
+        "get_to_work",
         "launch_app",
         "list_projects",
         "list_watches",
         "list_windows",
+        "map_view",
         "media_control",
+        "react",
         "recall",
         "remember",
+        "remember_voice",
         "resolve_watch",
+        "show_picture",
         "show_screen",
         "watch",
       ],
@@ -65,6 +73,32 @@ describe("tool surface", () => {
 
   test("no duplicate names", () => {
     assert.equal(byName.size, velaToolDefs.length);
+  });
+});
+
+describe("voice tools", () => {
+  after(() => useVoices(null));
+
+  test("with voices off, saving one says so rather than claiming it worked", async () => {
+    // A model told "saved" by a tool that had nothing to save with would tell
+    // Sarah she will be remembered, and she would not be.
+    useVoices(null);
+    assert.match(await call("remember_voice", { name: "Sarah" }), /aren't on/);
+    assert.match(await call("forget_voice", { name: "Sarah" }), /aren't on/);
+  });
+
+  test("with voices on, the tools reach the voices she is listening with", async () => {
+    const asked: string[] = [];
+    useVoices({
+      listen: async () => ({ kind: "unsure", score: 0, speech: 0 }),
+      met: () => {},
+      remember: (name) => (asked.push(`remember ${name}`), "Saved."),
+      forget: (name) => (asked.push(`forget ${name}`), "Forgot."),
+      names: () => [],
+    });
+    assert.equal(await call("remember_voice", { name: "Sarah" }), "Saved.");
+    assert.equal(await call("forget_voice", { name: "Sarah" }), "Forgot.");
+    assert.deepEqual(asked, ["remember Sarah", "forget Sarah"]);
   });
 });
 

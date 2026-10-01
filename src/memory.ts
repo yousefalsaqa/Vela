@@ -56,6 +56,17 @@ const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS watch_status_idx ON watch(status);
+
+  -- Voiceprints, one per person, saved only with that person's yes. The print
+  -- is a JSON array: 192 numbers, compared and blended in src/voices.ts.
+  -- samples is how many utterances it is the average of.
+  CREATE TABLE IF NOT EXISTS voice (
+    name       TEXT PRIMARY KEY COLLATE NOCASE,
+    print      TEXT NOT NULL,
+    samples    INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `;
 
 export type MemoryKind = "preference" | "project" | "fact" | "reference";
@@ -80,6 +91,13 @@ export type Trigger =
   | { kind: "file"; arg: string }
   /** Fire when a named process that was running stops running. */
   | { kind: "process"; arg: string };
+
+/** One person she knows by voice. See src/voices.ts. */
+export interface VoiceRow {
+  name: string;
+  print: number[];
+  samples: number;
+}
 
 export interface WatchRow {
   id: number;
@@ -200,6 +218,36 @@ export function createStore(
     return info.changes ? `Closed watch #${id}.` : `No active watch #${id}.`;
   }
 
+  /** Everyone whose voice she knows. */
+  function listVoices(): VoiceRow[] {
+    return (
+      db.prepare(`SELECT name, print, samples FROM voice ORDER BY name`).all() as unknown as {
+        name: string;
+        print: string;
+        samples: number;
+      }[]
+    ).map((r) => ({ name: r.name, print: JSON.parse(r.print) as number[], samples: r.samples }));
+  }
+
+  /**
+   * Save a voiceprint, or replace the one under that name. Whether it should
+   * be saved, and what it is the average of, is decided in src/voices.ts.
+   * The name keeps the spelling it was first saved with.
+   */
+  function saveVoice(name: string, print: number[], samples: number): void {
+    db.prepare(
+      `INSERT INTO voice (name, print, samples) VALUES (?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET
+         print = excluded.print,
+         samples = excluded.samples,
+         updated_at = datetime('now')`,
+    ).run(name, JSON.stringify(print), samples);
+  }
+
+  function forgetVoice(name: string): boolean {
+    return db.prepare(`DELETE FROM voice WHERE name = ?`).run(name).changes > 0;
+  }
+
   /** Record that we spoke up about a watch, so the next tick doesn't repeat it. */
   function markSpoke(id: number, message: string): void {
     db.prepare(
@@ -259,6 +307,9 @@ export function createStore(
     listWatches,
     resolveWatch,
     markSpoke,
+    listVoices,
+    saveVoice,
+    forgetVoice,
     buildContextBlock,
     close: () => db.close(),
   };
@@ -309,6 +360,9 @@ export const listWatches: Store["listWatches"] = () => store().listWatches();
 export const resolveWatch: Store["resolveWatch"] = (...a) =>
   store().resolveWatch(...a);
 export const markSpoke: Store["markSpoke"] = (...a) => store().markSpoke(...a);
+export const listVoices: Store["listVoices"] = () => store().listVoices();
+export const saveVoice: Store["saveVoice"] = (...a) => store().saveVoice(...a);
+export const forgetVoice: Store["forgetVoice"] = (...a) => store().forgetVoice(...a);
 export const buildContextBlock: Store["buildContextBlock"] = () =>
   store().buildContextBlock();
 

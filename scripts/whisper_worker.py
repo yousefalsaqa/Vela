@@ -5,9 +5,15 @@ air between Yousef finishing a sentence and Vela starting to think about it.
 This keeps the model resident, the same way the Kokoro worker does for speech.
 
 Protocol, one JSON object per line in, one status line out:
-    in : {"pcm": "C:/tmp/take.pcm", "rate": 16000, "prompt": "Vela, Kokoro"}
-    out: ok {"text": "open the fantasy project", "silence": 0.02, "logprob": -0.31}
-         err <message>
+    in : {"id": 7, "pcm": "C:/tmp/take.pcm", "rate": 16000, "prompt": "Vela, Kokoro"}
+    out: ok {"id": 7, "text": "open the fantasy project", "silence": 0.02, "logprob": -0.31}
+         err {"id": 7, "error": "<message>"}
+    in : {"id": 8, "warm": true}   (page the model back in; answered as an empty "ok")
+
+The id is echoed so the caller matches a reply to its request by name, not by
+position. By position, one reply that never came put every transcript after it
+on the sentence before; and a warm-up error printed at startup was taken as
+the answer to the first thing he said.
 
 The two numbers beside the text are how sure the decoder was that it was
 decoding anything at all. Whisper does not return nothing when handed room
@@ -70,8 +76,27 @@ for line in sys.stdin:
     line = line.strip()
     if not line:
         continue
+    ident = None
     try:
         request = json.loads(line)
+        ident = request.get("id")
+        if request.get("warm"):
+            # A sentence is on its way, and the model has been paged out while
+            # it sat idle. Touch all of it: the VAD on one pass, and the encoder
+            # and decoder on another, because VAD finding nothing means the
+            # decoder never runs at all. Low noise, so it decodes to nothing.
+            quiet = np.random.default_rng(0).normal(0, 0.003, 8000).astype(np.float32)
+            for vad in (True, False):
+                for _ in model.transcribe(
+                    quiet,
+                    language="en",
+                    beam_size=1,
+                    vad_filter=vad,
+                    condition_on_previous_text=False,
+                )[0]:
+                    pass
+            print(f"ok {json.dumps({'id': ident, 'text': '', 'silence': 1.0, 'logprob': 0.0})}", flush=True)
+            continue
         with open(request["pcm"], "rb") as handle:
             raw = handle.read()
 
@@ -112,8 +137,8 @@ for line in sys.stdin:
         silence = max((segment.no_speech_prob for segment in found), default=1.0)
         logprob = min((segment.avg_logprob for segment in found), default=-10.0)
         print(
-            f"ok {json.dumps({'text': text, 'silence': silence, 'logprob': logprob})}",
+            f"ok {json.dumps({'id': ident, 'text': text, 'silence': silence, 'logprob': logprob})}",
             flush=True,
         )
     except Exception as exc:  # noqa: BLE001 - one bad line must not kill the worker
-        print(f"err {exc}", flush=True)
+        print(f"err {json.dumps({'id': ident, 'error': str(exc)})}", flush=True)

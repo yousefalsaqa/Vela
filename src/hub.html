@@ -160,6 +160,11 @@ body[data-state="lost"] .state { color: var(--wrong); }
    one column got wider. */
 .thread { max-width: 88ch; }
 body[data-stage="on"] .thread { max-width: 40ch; }
+/* With the stage up there is no room for the detail beside the sentence: the
+   two columns below are 32ch and whatever is left of 40, which is about four
+   characters, and a reply came out one syllable a line ("fro / m / now").
+   Stacked, the sentence keeps its width and the detail goes under it. */
+body[data-stage="on"] .turn.told { grid-template-columns: minmax(0, 1fr); }
 
 /* ── what was said ────────────────────────────────────────────────────────
    Bottom-aligned, so the newest thing sits where the eye already is and the
@@ -392,6 +397,8 @@ body[data-stage="on"] .thread { max-width: 40ch; }
   font: 400 .95rem/1 var(--mono);
 }
 .panel .shut:hover { color: var(--ink); }
+.panel .shut.dock { font-size: .85rem; }
+.panel .shut.dock + .shut { margin-left: .5rem; }
 /* The corner. Two hairlines, which is enough to say "pull me". */
 .grip {
   position: absolute;
@@ -455,6 +462,16 @@ body.dragging .shield { display: block; }
 /* ── the stage ────────────────────────────────────────────────────────────
    What she pulled onto the bench between us. */
 body[data-stage="on"] .panel.stage { display: grid; }
+/* To the side: the conversation has moved on from what is on the stage, so
+   the conversation gets the room back and the stage keeps a corner of it,
+   still live, still clickable. His words: the map on the side while she goes
+   back to normal. One click on its name brings it back. */
+body[data-stage="side"] .panel.stage { display: grid; opacity: .9; }
+body[data-stage="side"] .panel.stage:hover { opacity: 1; }
+body[data-stage="side"] .panel.stage > header { cursor: zoom-in; }
+body[data-stage="side"] .thread { max-width: min(88ch, 64%); }
+.panel.stage { transition: left .45s var(--ease), top .45s var(--ease), width .45s var(--ease), height .45s var(--ease), opacity .3s var(--ease); }
+body.dragging .panel.stage { transition: none; }
 .stage iframe { width: 100%; height: 100%; border: 0; background: transparent; display: block; }
 
 /* ── the dock ─────────────────────────────────────────────────────────────
@@ -681,6 +698,60 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
   .stage header { padding-top: .35rem; padding-bottom: .4rem; }
 }
 
+/* ── her ─────────────────────────────────────────────────────────────────
+   Drawn on one canvas behind the floor: her stars, and the room's points
+   around her. See "Her" in the script. Nothing here takes part in layout
+   except the room the conversation leaves for her at its head. */
+.sky { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; }
+.floor > .thread { position: relative; z-index: 1; }
+/* What his pointer finds over her face: pressing her is talking to her. */
+.her-hit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 40%;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.her-hit:focus-visible { outline: 1px solid var(--cyan); outline-offset: 2px; }
+/* At the head of the conversation she needs the top of its column. */
+body[data-presence="column"] .thread { margin-top: var(--her-room, 170px); }
+/* Under her, the words start at the top and run down from her, rather than
+   sitting at the bottom of the floor with a gap between them and the face
+   they came from. Once they fill the column it scrolls as it always has. */
+body[data-presence="column"] .thread > .fill { flex: 0 0 0; }
+.thread { transition: margin-top .6s var(--ease); }
+
+/* The line under her: what she just said to him, or a caption on a face. */
+.her-says {
+  position: fixed;
+  z-index: 8;
+  margin: 0;
+  max-width: min(32rem, 80vw);
+  transform: translate(-50%, 0);
+  text-align: center;
+  font: italic 400 clamp(1.3rem, 2.3vw, 1.9rem)/1.2 var(--serif);
+  color: var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .5s var(--ease);
+}
+.her-says.on { opacity: 1; }
+/* While she is in the middle, what she said is under her, so the same line in
+   the thread would be said twice. */
+body[data-presence="center"] .turn.unbidden:not(.past) { visibility: hidden; }
+
+/* Her name and state make way while she is in the middle: she is the thing
+   saying who she is. A filter rather than opacity, because the rail's
+   entrance animation leaves an inline opacity that beats any rule here. */
+.rail .mark, .rail .state { transition: filter .5s var(--ease); }
+body[data-presence="center"] .rail .mark,
+body[data-presence="center"] .rail .state { filter: opacity(0); }
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
@@ -699,6 +770,8 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
   </header>
 
   <div class="floor">
+    <canvas class="sky" id="sky" aria-hidden="true"></canvas>
+    <button type="button" class="her-hit" id="her" title="Talk to her" aria-label="Vela. Talk to her"></button>
     <div class="thread" id="thread" aria-live="polite">
       <div class="fill"></div>
       <div class="locked" id="locked" hidden></div>
@@ -714,6 +787,7 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
       <header>
         <h2 id="stageTitle"></h2>
         <p class="note" id="stageNote"></p>
+        <button type="button" class="shut dock" id="stageDock" title="Move it to the side" aria-label="Move it to the side" aria-pressed="false">⇲</button>
         <button type="button" class="shut" id="stageShut" title="Put it away" aria-label="Put it away">×</button>
       </header>
       <iframe id="stageFrame" sandbox="allow-scripts" title="What she is showing"></iframe>
@@ -722,6 +796,7 @@ body[data-typing="on"] .send { opacity: 1; pointer-events: auto; }
   </div>
 
   <div class="shield" id="shield"></div>
+  <p class="her-says" id="herSays" aria-live="polite"></p>
 
   <form class="dock" id="dock">
     <span class="level" id="level" aria-hidden="true"></span>
@@ -770,7 +845,7 @@ const thread = $("thread"), stateEl = $("state"), doingEl = $("doing"), lockedEl
 const dock = $("dock"), text = $("text"), micKey = $("mic"), earKey = $("ear"), sendKey = $("send");
 const stopKey = $("stop");
 const stage = $("stage"), stageTitle = $("stageTitle"), stageNote = $("stageNote");
-const stageFrame = $("stageFrame"), stageShut = $("stageShut"), probe = $("probe");
+const stageFrame = $("stageFrame"), stageShut = $("stageShut"), stageDock = $("stageDock"), probe = $("probe");
 const works = $("works"), worksPanel = $("worksPanel"), worksCount = $("worksCount"), worksKeep = $("worksKeep");
 const level = $("level"), shield = $("shield");
 const pull = $("pull");
@@ -817,10 +892,26 @@ function place(panel) {
   const saved = (deskRead()[bucket()] || {})[name] || DEFAULTS[name];
   // Kept as fractions so a resized window rearranges rather than strands a
   // panel off the edge.
-  panel.style.left = Math.round(saved.x * desk.width) + "px";
-  panel.style.top = Math.round(saved.y * desk.height) + "px";
-  panel.style.width = Math.round(saved.w * desk.width) + "px";
-  panel.style.height = Math.round(saved.h * desk.height) + "px";
+  // Inside the floor, whatever was saved: a layout remembered on a bigger
+  // window, or a floor shortened by a long message in the box, used to leave
+  // the bottom of the Work panel cut off below the edge.
+  const w = Math.min(Math.round(saved.w * desk.width), desk.width - 16);
+  const h = Math.min(Math.round(saved.h * desk.height), desk.height - 8);
+  panel.style.width = w + "px";
+  panel.style.height = h + "px";
+  panel.style.left = Math.max(0, Math.min(Math.round(saved.x * desk.width), desk.width - w)) + "px";
+  panel.style.top = Math.max(0, Math.min(Math.round(saved.y * desk.height), desk.height - h)) + "px";
+}
+
+/** The corner the stage moves to when the conversation moves on. */
+const SIDE = { x: .70, y: .03, w: .28, h: .44 };
+
+function placeSide(panel) {
+  const desk = panel.parentElement.getBoundingClientRect();
+  panel.style.left = Math.round(SIDE.x * desk.width) + "px";
+  panel.style.top = Math.round(SIDE.y * desk.height) + "px";
+  panel.style.width = Math.round(SIDE.w * desk.width) + "px";
+  panel.style.height = Math.round(SIDE.h * desk.height) + "px";
 }
 
 function remember(panel) {
@@ -853,6 +944,9 @@ function movable(panel) {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     if (e.target.closest("button")) return;      // the × is not a handle
     if (phone()) return;                          // stacked; nothing to arrange
+    // Docked, its name is a way back rather than a handle: dragging the side
+    // position would save the corner as where he wants it.
+    if (panel === stage && document.body.dataset.stage === "side") { dockStage(false); return; }
     const desk = panel.parentElement.getBoundingClientRect();
     const box = panel.getBoundingClientRect();
     const from = { x: e.clientX, y: e.clientY };
@@ -905,9 +999,16 @@ for (const panel of document.querySelectorAll(".panel")) {
   place(panel);
   movable(panel);
 }
-addEventListener("resize", () => {
-  for (const panel of document.querySelectorAll(".panel")) place(panel);
-});
+function placeAll() {
+  for (const panel of document.querySelectorAll(".panel")) {
+    if (panel === stage && document.body.dataset.stage === "side") placeSide(panel);
+    else place(panel);
+  }
+}
+addEventListener("resize", placeAll);
+// The floor changes size without the window doing so — the message box grows
+// as he types — and every panel has to fit the floor it is on.
+new ResizeObserver(placeAll).observe(document.querySelector(".floor"));
 
 /* ════════════════════════════════════════════════════════════════════════
    The level
@@ -1039,7 +1140,7 @@ function stepKind(line) {
   if (/^(remember|recall|forget)$/.test(v)) return "memory";
   if (/^(launch_app|media_control|list_windows|browser_history)$/.test(v)) return "desktop";
   if (/^(watch|list_watches|resolve_watch)$/.test(v)) return "watch";
-  if (/^(show_screen|clear_screen)$/.test(v)) return "screen";
+  if (/^(show_screen|clear_screen|show_picture|find_places|map_view)$/.test(v)) return "screen";
   if (v.startsWith("gws-calendar")) return "calendar";
   if (v.startsWith("gws-gmail")) return "mail";
   if (v.startsWith("gws-")) return "google";
@@ -1180,6 +1281,7 @@ function tool(lines) {
   for (const line of lines) {
     t.steps.push(line);
     const kind = stepKind(line);
+    if (kind === "screen") { t.screen = true; dockStage(false); look(9, 0, 1200); }
     const made = CHANGED.has(kind);
 
     const li = document.createElement("li");
@@ -1382,7 +1484,13 @@ function redraw(t, half, tagged, final) {
 
 function delta(chunk) {
   const t = hers();
-  if (!t.firstDelta) t.firstDelta = Date.now();
+  if (!t.firstDelta) {
+    t.firstDelta = Date.now();
+    // Her first words, and nothing on the screen touched to get to them: the
+    // conversation has moved on, so the stage moves aside for it.
+    if (!t.screen && document.body.dataset.stage === "on") dockStage(true);
+    look(1, 6, 900); // down at the words as they start
+  }
   t.raw += chunk;
   // Only the part with no half-written marker in it. The rest is one chunk
   // away and drawing it now would show a `**` that is about to disappear.
@@ -1461,6 +1569,10 @@ function done(ms, fallback) {
 /** She started this one. It should reach him without behaving like a website. */
 function unbidden(said) {
   recede();
+  // Her mouth says it as the room does: the line is played the moment it is
+  // sent, and about a quarter second a word is how long she takes over it.
+  speakFor(350 + 260 * said.trim().split(/\s+/).length);
+  herLine(said);
   const el = turnEl("unbidden");
   const when = document.createElement("span");
   when.className = "when";
@@ -1490,12 +1602,19 @@ function hitch(message) {
    The stage
 
    She writes a page and shows it; it lands here. The iframe's URL carries a
-   screen-scoped key, minted per show, that opens /screen/file and nothing
-   else — the master token never enters a page she wrote. Anything inside can
+   screen-scoped key, minted per show, that opens /screen/file, the map's
+   tiles, and nothing else — the master token never enters a page she wrote.
+   Anything inside can
    call parent.postMessage({ vela: "..." }, "*") and it reaches her as words.
    ════════════════════════════════════════════════════════════════════════ */
+/* The live map's latest state, and whether the page on the stage asked for it.
+   Declared ahead of showScreen, which a restore can call while this script is
+   still starting up. See sendMap. */
+let mapNow = null, mapReady = false;
+
 function showScreen(meta, quiet) {
   screenUp = meta || null;
+  mapReady = false;
   if (!screenUp) {
     stageFrame.removeAttribute("src");
     document.body.removeAttribute("data-stage");
@@ -1505,8 +1624,11 @@ function showScreen(meta, quiet) {
   stageTitle.textContent = screenUp.title;
   stageNote.textContent = screenUp.note || "";
   stageFrame.src = "/screen/file?s=" + encodeURIComponent(screenUp.s || "");
+  look(9, 1, 1600); // over at what she just put up
   stageHidden = false;
   document.body.dataset.stage = "on";
+  place(stage);
+  stageDock.setAttribute("aria-pressed", "false");
   if (phone()) memory(false);
   animate(stage, { opacity: [0, 1], duration: 460, ease: "outCubic" });
   if (!quiet) follow();
@@ -1527,10 +1649,46 @@ function stageAway() {
 
 stageShut.addEventListener("click", stageAway);
 
+/* To the side and back. Asked for by the button, by clicking the docked
+   stage's name, and by the conversation itself: a turn whose first words come
+   without her touching the screen has moved on from it (see delta). Never on
+   a phone, where the stage is stacked under the conversation already. */
+function dockStage(side) {
+  if (!screenUp || stageHidden || phone()) return;
+  if (side === (document.body.dataset.stage === "side")) return;
+  document.body.dataset.stage = side ? "side" : "on";
+  if (side) placeSide(stage);
+  else place(stage);
+  stageDock.setAttribute("aria-pressed", side ? "true" : "false");
+  stageDock.title = side ? "Bring it back" : "Move it to the side";
+  stageDock.textContent = side ? "⤢" : "⇲";
+  follow();
+}
+stageDock.addEventListener("click", () => dockStage(document.body.dataset.stage !== "side"));
+
+/* The map: live, not redrawn. Nothing on the stage can reach the service, so
+   its state comes through here — every change streams in as a "map" event
+   and is handed straight to the page, and a page that has just loaded says
+   it is ready and is given the current one. */
+function sendMap() {
+  if (!mapReady || !mapNow || !stageFrame.contentWindow) return;
+  stageFrame.contentWindow.postMessage({ vela_map_state: mapNow }, "*");
+}
+function mapChanged(state) { mapNow = state; sendMap(); }
+
 /* What he does on her page comes back as words. Only from the stage's own
    window, only a string, and never more than a sentence's worth. */
 addEventListener("message", (e) => {
   if (!screenUp || !stageFrame.contentWindow || e.source !== stageFrame.contentWindow) return;
+  if (e.data && e.data.vela_map === "ready") {
+    mapReady = true;
+    if (mapNow) sendMap();
+    else fetch("/map/state", { headers: auth })
+      .then((r) => (r.status === 200 ? r.json() : null))
+      .then((s) => { if (s) mapChanged(s); })
+      .catch(() => {});
+    return;
+  }
   const said = e.data && typeof e.data.vela === "string" ? e.data.vela.trim().slice(0, 500) : "";
   if (!said) return;
   yours(said, true);
@@ -1614,6 +1772,7 @@ function roomNext(text) {
  * the next call ends this one.
  */
 function sweepRoom(item, ms) {
+  speakFor(ms);
   roomHead();
   if (!item || !item.spans || !item.range || !ms) return;
   const [from, to] = item.range;
@@ -1913,6 +2072,18 @@ function drawRoom() {
   earKey.setAttribute("aria-label", earKey.title);
 }
 
+/* The room told this page its switches. A page that loaded before the
+   microphone opened learns here that it is in a room at all: its one look at
+   /health came too early to say so. */
+function inTheRoom(room) {
+  inRoom = true;
+  roomHearing = Boolean(room.hearing);
+  roomSpeaking = Boolean(room.speaking);
+  micKey.hidden = false;
+  earKey.hidden = false;
+  drawRoom();
+}
+
 /* The server owns both switches; this page only asks. Taking the reply as the
    truth rather than assuming the click landed keeps the two in step when a
    request fails or something else has already changed them. */
@@ -2031,10 +2202,474 @@ function abandon(why) {
    the browser's call, and Firefox refuses outright. So say goodbye on screen
    first: if the window does go, nobody reads it, and if it stays, he is looking
    at a page that knows the conversation ended rather than one frozen mid-reply
-   pretending to still be listening. */
+   pretending to still be listening.
+
+   In her own window (scripts/window_worker.py, which is where window.pywebview
+   comes from) nothing is closed at all: the service hides the window and keeps
+   this page loaded, so that the next time she is called she is already here. */
 function farewell() {
   setState("idle", "goodbye");
-  window.close();
+  // The conversation is over, so the next time she is called she meets him in
+  // the middle again rather than in the corner of an old one.
+  recede();
+  if (!window.pywebview) window.close();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Her
+
+   Her face is made of her stars: Vela, the Sails, the real ones, in their
+   real colours and brightness. Her eyes are its two brightest, Regor
+   (blue-white) and Suhail (orange), and what she feels is in the lines a pen
+   draws over them — ^ ^, -_-, one raised while she thinks. Designed with him,
+   2026-10-01: Sails for her, Field for the room, the lids from Hand.
+
+   The room is a field of points behind everything. Her stars light it; when
+   she speaks, rings go out from her, and when she listens they come in, so
+   which way the conversation is flowing can be seen from across the room.
+
+   Where she is: in the middle when she has just been called and nothing else
+   is up, greeting him; at the head of the conversation once there is one, her
+   words running down from her; and back to her constellation, drifting, after
+   a few quiet minutes. She is drawn on one canvas behind the room and never
+   takes part in the layout, so nothing she does can squeeze or cut anything.
+   ════════════════════════════════════════════════════════════════════════ */
+const skyEl = $("sky"), sky = skyEl.getContext("2d");
+const herEl = $("her"), herSays = $("herSays");
+
+const CYAN = [79, 209, 219], GOLD = [245, 185, 95], INK = [233, 242, 246], FAINT = [63, 82, 93];
+/* Real colour from spectral type, real brightness as visual magnitude, and a
+   place in a 240 x 150 box from right ascension and declination. */
+const STARS = [
+  { name: "Regor",  mag: 1.83, rgb: [158, 180, 255], sky: [196, 70] },
+  { name: "Suhail", mag: 2.21, rgb: [255, 178, 108], sky: [140, 44] },
+  { name: "δ Vel",  mag: 1.96, rgb: [232, 238, 255], sky: [168, 116] },
+  { name: "κ Vel",  mag: 2.47, rgb: [176, 196, 255], sky: [127, 118] },
+  { name: "μ Vel",  mag: 2.69, rgb: [255, 236, 196], sky: [36, 82] },
+  { name: "N Vel",  mag: 3.13, rgb: [255, 190, 128], sky: [92, 64] },
+  { name: "φ Vel",  mag: 3.54, rgb: [184, 202, 255], sky: [90, 116] },
+  { name: "ψ Vel",  mag: 3.58, rgb: [250, 246, 238], sky: [118, 26] },
+  { name: "ο Vel",  mag: 3.60, rgb: [176, 196, 255], sky: [172, 104] },
+  { name: "q Vel",  mag: 3.85, rgb: [214, 224, 255], sky: [70, 36] },
+  { name: "b Vel",  mag: 3.80, rgb: [253, 244, 232], sky: [172, 66] },
+  { name: "a Vel",  mag: 3.90, rgb: [228, 234, 255], sky: [206, 98] },
+];
+/* The figure as star charts draw it, and who plays which part of her face. */
+const FIGURE = [[0, 10], [10, 1], [1, 7], [7, 9], [9, 5], [5, 4], [4, 6], [6, 3], [3, 8], [8, 2], [2, 11], [11, 0]];
+const ROLE = { eyeL: 0, eyeR: 1, lidL: [5, 9], lidR: [7, 10], mouth: [6, 3, 2, 8, 11], spark: 4 };
+/* The react tool's faces, as her poses. */
+const REACTION = { deadpan: "deadpan", "side-eye": "sideeye", happy: "happy", laugh: "laugh", surprised: "surprised", thinking: "thinking", wince: "wince", smug: "smug" };
+/* Quiet this long, and she goes back to being stars. */
+const AWAY_AFTER_MS = 3 * 60_000;
+
+const Her = {
+  mode: "center",
+  at: { cx: 0, cy: 0, w: 0, set: false },   // where she is drawn, eased
+  goal: { cx: 0, cy: 0, w: 0 },             // where she is going
+  pos: STARS.map((s) => ({ x: s.sky[0], y: s.sky[1], a: 1, s: 1 })),
+  accent: CYAN.slice(), figure: 1,
+  expr: null, exprUntil: 0, exprTimer: 0,
+  aim: null, wander: { x: 0, y: 0, next: 0 }, gaze: { x: 0, y: 0 },
+  speakUntil: 0, amp: 0, ampGoal: .5, ampNext: 0,
+  pose: "", drawnAt: 0, lastActive: performance.now(),
+  grid: [], w: 0, h: 0, lastDraw: 0,
+};
+
+const rgba = (c, a) => "rgba(" + (c[0] | 0) + "," + (c[1] | 0) + "," + (c[2] | 0) + "," + a + ")";
+const mixc = (a, b, k) => a.map((v, i) => v + (b[i] - v) * k);
+
+/** Look at something for a while: the stage, the words, him. Face units. */
+function look(x, y, ms) { Her.aim = { x, y, until: performance.now() + ms }; }
+/** Her mouth moves for this long; the room says how long each sentence lasts. */
+function speakFor(ms) { Her.speakUntil = Math.max(Her.speakUntil, performance.now() + ms); awake(); }
+/** Something happened: she is here, not away. */
+function awake() {
+  Her.lastActive = performance.now();
+  if (Her.mode === "away") presence();
+}
+
+/* ── what she is doing, as a pose ─────────────────────────────────────── */
+function expression(t) {
+  if (Her.mode === "away") return "away";
+  if (Her.expr && t < Her.exprUntil) return Her.expr;
+  const st = document.body.dataset.state;
+  if (t < Her.speakUntil || st === "speaking") return "speaking";
+  if (st === "working") return "thinking";
+  if (st === "listening") return "listening";
+  if (st === "lost") return "lost";
+  return "rest";
+}
+
+function gazeFor(name, t) {
+  if (Her.aim && t < Her.aim.until) return Her.aim;
+  if (name === "thinking") return { x: 5, y: -4 };
+  if (name === "listening") return { x: 0, y: -1 };
+  if (name === "sideeye") return { x: 8, y: 1 };
+  if (still) return { x: 0, y: 0 };
+  if (t > Her.wander.next) {
+    const away = Math.random() < .4;
+    Her.wander = { x: away ? (Math.random() * 2 - 1) * 4 : 0, y: away ? (Math.random() * 2 - 1) * 2 : 0, next: t + 2000 + Math.random() * 4000 };
+  }
+  return Her.wander;
+}
+
+function pose(name, t) {
+  const sec = t / 1000;
+  const P = STARS.map(() => ({ x: 0, y: 0, a: 1, s: 1 }));
+  const strokes = [];
+  if (name === "away") {
+    STARS.forEach((s, i) => {
+      P[i].x = s.sky[0] + Math.sin(sec * .3 + i) * 1.4;
+      P[i].y = s.sky[1] + Math.cos(sec * .23 + i * 1.7) * 1.4;
+      P[i].a = .85;
+    });
+    return { P, strokes, accent: [70, 130, 140], figure: 1 };
+  }
+  const goal = gazeFor(name, t);
+  Her.gaze.x += (goal.x - Her.gaze.x) * .14;
+  Her.gaze.y += (goal.y - Her.gaze.y) * .14;
+  const gx = Her.gaze.x, gy = Her.gaze.y;
+  const k = (t % 4700) / 4700;
+  const blink = still || name === "lost" ? 0 : k > .965 ? Math.sin(Math.PI * (k - .965) / .035) : 0;
+
+  for (const side of ["L", "R"]) {
+    const cx = side === "L" ? 84 : 156, cy = 62, mirror = side === "L" ? 1 : -1;
+    let A, M, B, sharp = false, eyeA = 1, size = 1;
+    switch (name) {
+      case "listening": A = [cx - 17, cy - 9]; M = [cx, cy - 24]; B = [cx + 17, cy - 9]; size = 1.12; break;
+      case "thinking":
+        if (side === "R") { A = [cx - 16, cy - 12]; M = [cx, cy - 28]; B = [cx + 16, cy - 13]; }
+        else { A = [cx - 16, cy - 7]; M = [cx, cy - 15]; B = [cx + 16, cy - 7]; }
+        break;
+      case "happy": case "laugh": A = [cx - 15, cy + 5]; M = [cx, cy - 10]; B = [cx + 15, cy + 5]; sharp = true; eyeA = 0; break;
+      case "deadpan": case "lost": A = [cx - 19, cy + 1]; M = [cx, cy + 1]; B = [cx + 19, cy + 1]; eyeA = 0; break;
+      case "surprised": A = [cx - 18, cy - 15]; M = [cx, cy - 31]; B = [cx + 18, cy - 15]; size = 1.35; break;
+      case "wince": A = [cx - 13 * mirror, cy - 11]; M = [cx + 7 * mirror, cy]; B = [cx - 13 * mirror, cy + 11]; sharp = true; eyeA = 0; break;
+      case "sideeye": A = [cx - 17, cy - 3]; M = [cx, cy - 6]; B = [cx + 17, cy - 3]; break;
+      case "smug":
+        if (side === "L") { A = [cx - 17, cy - 2]; M = [cx, cy - 6]; B = [cx + 17, cy - 3]; }
+        else { A = [cx - 16, cy - 6]; M = [cx, cy - 14]; B = [cx + 16, cy - 6]; }
+        break;
+      default: A = [cx - 16, cy - 7]; M = [cx, cy - 18]; B = [cx + 16, cy - 7];
+    }
+    if (eyeA > 0 && blink > 0) {
+      A = [A[0], A[1] + 8 * blink]; B = [B[0], B[1] + 8 * blink]; M = [M[0], M[1] + 18 * blink]; eyeA *= 1 - .85 * blink;
+    }
+    const eye = side === "L" ? ROLE.eyeL : ROLE.eyeR, ends = side === "L" ? ROLE.lidL : ROLE.lidR;
+    Object.assign(P[eye], { x: cx + gx, y: cy + gy, a: eyeA, s: size });
+    Object.assign(P[ends[0]], { x: A[0], y: A[1], a: .55, s: .8 });
+    Object.assign(P[ends[1]], { x: B[0], y: B[1], a: .55, s: .8 });
+    const pts = [];
+    for (let i = 0; i <= 20; i++) {
+      const u = i / 20;
+      if (sharp) {
+        const v = u < .5 ? u * 2 : (u - .5) * 2, a = u < .5 ? A : M, b = u < .5 ? M : B;
+        pts.push([a[0] + (b[0] - a[0]) * v, a[1] + (b[1] - a[1]) * v]);
+      } else {
+        pts.push([(1 - u) ** 2 * A[0] + 2 * (1 - u) * u * M[0] + u * u * B[0], (1 - u) ** 2 * A[1] + 2 * (1 - u) * u * M[1] + u * u * B[1]]);
+      }
+    }
+    strokes.push({ pts, from: ends[0], to: ends[1], via: eye, w: 3.6, order: side === "L" ? 0 : 1 });
+  }
+
+  // the mouth: five stars on a curve, and the pen's line through them
+  const m = ROLE.mouth, mp = [];
+  if (t > Her.ampNext) { Her.ampGoal = .3 + Math.random() * .7; Her.ampNext = t + 110 + Math.random() * 130; }
+  let live = null;
+  if (analyser && ampData && document.body.dataset.state === "speaking") {
+    analyser.getByteTimeDomainData(ampData);
+    let peak = 0;
+    for (let i = 0; i < ampData.length; i++) peak = Math.max(peak, Math.abs(ampData[i] - 128));
+    live = Math.min(1, peak / 60);
+  }
+  Her.amp += ((live ?? Her.ampGoal) - Her.amp) * .3;
+  for (let i = 0; i < 5; i++) {
+    const u = i / 4, hold = Math.sin(Math.PI * u);
+    let x = 92 + 56 * u, y;
+    switch (name) {
+      case "speaking": y = 104 + 5 * hold + (still ? 0 : 11 * Her.amp * hold * Math.sin(2 * Math.PI * 1.6 * u + sec * 9)); break;
+      case "thinking": y = 107 - 4 * u + (still ? 0 : 1.5 * Math.sin(sec * 3 + u * 6)); break;
+      case "listening": y = 104 + 5 * hold; x = 98 + 44 * u; break;
+      case "happy": y = 100 + 13 * hold; x = 88 + 64 * u; break;
+      case "laugh": y = 98 + 16 * hold + (still ? 0 : 2.5 * hold * Math.sin(sec * 18)); x = 86 + 68 * u; break;
+      case "deadpan": y = 108; x = 106 + 28 * u; break;
+      case "lost": y = 107; x = 104 + 32 * u; break;
+      case "surprised": { const a = (i / 5) * Math.PI * 2 - Math.PI / 2; x = 120 + Math.cos(a) * 8; y = 110 + Math.sin(a) * 9; break; }
+      case "wince": y = 106 + (i % 2 ? -4 : 4); x = 98 + 44 * u; break;
+      case "sideeye": y = 107 + 2.5 * u; x = 100 + 40 * u; break;
+      case "smug": y = 108 - 7 * u * u; x = 98 + 46 * u; break;
+      default: y = 103 + 7 * hold + (still ? 0 : .5 * hold * Math.sin(2 * Math.PI * 2 * u + t / 300));
+    }
+    mp.push([x, y]);
+    Object.assign(P[m[i]], { x, y, a: .85, s: .82 });
+  }
+  strokes.push({ pts: smoothThrough(mp, name === "surprised"), mouth: m, w: name === "deadpan" || name === "lost" ? 3.2 : 4.2, order: 2 });
+
+  // the spare star: a falling one for -_-, a thought rising while she thinks
+  const sp = P[ROLE.spark];
+  if (name === "deadpan") Object.assign(sp, { x: 214, y: 30 + ((t / 30) % 26), a: .95, s: .95 });
+  else if (name === "thinking") Object.assign(sp, { x: 200 + Math.sin(sec * 2) * 3, y: 26 - ((t / 60) % 10), a: .9, s: .75 });
+  else if (name === "surprised" || name === "laugh") Object.assign(sp, { x: 208, y: 26, a: .9 * (.5 + .5 * Math.sin(sec * 9)), s: 1.1 });
+  else Object.assign(sp, { x: STARS[ROLE.spark].sky[0], y: STARS[ROLE.spark].sky[1] - 30, a: 0, s: .6 });
+
+  const warm = ["speaking", "happy", "laugh", "deadpan", "surprised", "wince", "sideeye", "smug"];
+  const accent = name === "lost" ? FAINT : warm.includes(name) ? GOLD : CYAN;
+  return { P, strokes, accent, figure: 0 };
+}
+
+/** Catmull-Rom through the stars, so the pen's line passes through every one. */
+function smoothThrough(pts, loop) {
+  const out = [], n = pts.length, at = (i) => pts[loop ? (i + n) % n : Math.max(0, Math.min(n - 1, i))];
+  const segs = loop ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    for (let k = 0; k < 8; k++) {
+      const u = k / 8, p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+      const f = (a, b, c, d) => .5 * (2 * b + (-a + c) * u + (2 * a - 5 * b + 4 * c - d) * u * u + (-a + 3 * b - 3 * c + d) * u * u * u);
+      out.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])]);
+    }
+  }
+  out.push(loop ? out[0] : pts[n - 1]);
+  return out;
+}
+
+/* ── drawing ──────────────────────────────────────────────────────────── */
+function fitSky() {
+  const r = skyEl.getBoundingClientRect(), d = devicePixelRatio || 1;
+  skyEl.width = Math.max(1, r.width * d); skyEl.height = Math.max(1, r.height * d);
+  sky.setTransform(d, 0, 0, d, 0, 0);
+  Her.w = r.width; Her.h = r.height;
+  const step = 15;
+  Her.grid = [];
+  for (let y = step / 2; y < r.height; y += step) for (let x = step / 2; x < r.width; x += step) Her.grid.push(x, y);
+}
+
+function drawHer(t) {
+  requestAnimationFrame(drawHer);
+  // Thirty a second while she is here; eight while she is only stars.
+  if (t - Her.lastDraw < (Her.mode === "away" ? 120 : 32)) return;
+  Her.lastDraw = t;
+  if (Her.mode !== "away" && t - Her.lastActive > AWAY_AFTER_MS && !open && !speakingNow && document.body.dataset.state === "idle") {
+    Her.mode = "away";
+    recede();
+    placeHer();
+  }
+
+  // gliding between places
+  const a = Her.at, g = Her.goal;
+  if (!a.set) { Object.assign(a, g, { set: true }); }
+  a.cx += (g.cx - a.cx) * .1; a.cy += (g.cy - a.cy) * .1; a.w += (g.w - a.w) * .1;
+  const scale = a.w / 240, ox = a.cx - 120 * scale, oy = a.cy - 75 * scale;
+  const X = (x) => ox + x * scale, Y = (y) => oy + y * scale;
+  // the button over her face moves with her
+  herEl.style.transform = "translate(" + Math.round(ox) + "px," + Math.round(oy + 10 * scale) + "px)";
+  herEl.style.width = Math.round(240 * scale) + "px";
+  herEl.style.height = Math.round(120 * scale) + "px";
+
+  const name = expression(t);
+  if (name !== Her.pose) { Her.pose = name; Her.drawnAt = t; }
+  const target = pose(name, t);
+  const reveal = (order) => still ? 1 : Math.max(0, Math.min(1, (t - Her.drawnAt - order * 140) / 520));
+  Her.accent = mixc(Her.accent, target.accent, .07);
+  Her.figure += (target.figure - Her.figure) * .06;
+  Her.pos.forEach((p, i) => {
+    const q = target.P[i];
+    p.x += (q.x - p.x) * .16; p.y += (q.y - p.y) * .16; p.a += (q.a - p.a) * .2; p.s += (q.s - p.s) * .2;
+  });
+
+  const w = Her.w, h = Her.h;
+  sky.clearRect(0, 0, w, h);
+
+  /* the room: points, lit by her stars, moved by what she is doing */
+  const mouth = [X(120), Y(106)];
+  const lights = Her.pos.map((p, i) => [X(p.x), Y(p.y), p.a * Math.pow(10, -0.4 * (STARS[i].mag - 1.8)), STARS[i].rgb]);
+  const sig = (26 * scale) ** 2, reach = sig * 6;
+  const ring = Math.max(12, 17 * scale);
+  for (let i = 0; i < Her.grid.length; i += 2) {
+    const x = Her.grid[i], y = Her.grid[i + 1];
+    let v = 0, tint = FAINT;
+    for (const [lx, ly, la, rgb] of lights) {
+      const d = (x - lx) ** 2 + (y - ly) ** 2;
+      if (d > reach) continue;
+      const e = la * Math.exp(-d / sig);
+      if (e > v) { v = e; tint = rgb; }
+    }
+    let wave = 0;
+    if (!still) {
+      const r = Math.hypot(x - mouth[0], y - mouth[1]);
+      if (name === "speaking" || name === "laugh") wave = .42 * Math.max(0, Math.sin(r / ring - t / 95)) * Math.exp(-r / (420 * Math.max(.6, scale)));
+      else if (name === "listening") wave = .3 * Math.max(0, Math.sin(r / ring + t / 140)) * Math.exp(-r / (380 * Math.max(.6, scale)));
+      else if (name === "thinking") { const band = ((t / 2200) % 1) * (w + 300) - 150; wave = .22 * Math.exp(-((x - band) ** 2) / 3000); }
+    }
+    const alpha = Math.min(.85, .13 + .55 * v + wave * .85);
+    const col = wave > v ? mixc(FAINT, Her.accent, Math.min(1, wave * 1.8)) : mixc(FAINT, tint, Math.min(1, v * 2.2));
+    sky.fillStyle = rgba(col, alpha);
+    const s = 1.4 + v * 1.2;
+    sky.fillRect(x - s / 2, y - s / 2, s, s);
+  }
+
+  /* away: the figure as a star chart draws it */
+  if (Her.figure > .02) {
+    sky.lineWidth = 1;
+    for (const [i, j] of FIGURE) {
+      const p = Her.pos[i], q = Her.pos[j];
+      const grad = sky.createLinearGradient(X(p.x), Y(p.y), X(q.x), Y(q.y));
+      grad.addColorStop(0, rgba(STARS[i].rgb, .3 * Her.figure));
+      grad.addColorStop(1, rgba(STARS[j].rgb, .3 * Her.figure));
+      sky.strokeStyle = grad;
+      sky.beginPath(); sky.moveTo(X(p.x), Y(p.y)); sky.lineTo(X(q.x), Y(q.y)); sky.stroke();
+    }
+  }
+
+  /* here: the pen's lines, shading from star to star */
+  if (Her.figure < .98) {
+    const on = 1 - Her.figure;
+    sky.lineCap = "round"; sky.lineJoin = "round";
+    for (const s of target.strokes) {
+      const rv = reveal(s.order);
+      if (rv <= 0) continue;
+      const pts = s.pts, n = pts.length, upto = Math.max(2, Math.min(n, Math.ceil((n - 1) * rv) + 1));
+      const colAt = (u) => {
+        if (s.mouth) { const seg = Math.min(3, Math.floor(u * 4)), k = u * 4 - seg; return mixc(STARS[s.mouth[seg]].rgb, STARS[s.mouth[seg + 1]].rgb, k); }
+        return u < .5 ? mixc(STARS[s.from].rgb, STARS[s.via].rgb, u * 2) : mixc(STARS[s.via].rgb, STARS[s.to].rgb, (u - .5) * 2);
+      };
+      sky.strokeStyle = rgba(Her.accent, .06 * on);
+      sky.lineWidth = s.w * scale * 2.2;
+      sky.beginPath(); sky.moveTo(X(pts[0][0]), Y(pts[0][1]));
+      for (let i = 1; i < upto; i++) sky.lineTo(X(pts[i][0]), Y(pts[i][1]));
+      sky.stroke();
+      for (let i = 0; i < upto - 1; i++) {
+        const u = i / (n - 1), taper = .3 + .7 * Math.pow(Math.sin(Math.PI * Math.min(1, (i + .5) / (n - 1))), .55);
+        sky.strokeStyle = rgba(mixc(colAt(u), INK, .12), on);
+        sky.lineWidth = Math.max(1, s.w * scale * .55 * taper);
+        sky.beginPath(); sky.moveTo(X(pts[i][0]), Y(pts[i][1])); sky.lineTo(X(pts[i + 1][0]), Y(pts[i + 1][1])); sky.stroke();
+      }
+    }
+  }
+
+  /* the stars: core, halo, spikes on the bright ones, and the air moving them */
+  Her.pos.forEach((p, i) => {
+    if (p.a < .02) return;
+    const s = STARS[i], x = X(p.x), y = Y(p.y);
+    const twinkle = still ? 1 : .82 + .18 * Math.sin(t / (210 + i * 37) + i * 2.3) * Math.sin(t / (530 + i * 13));
+    const r = (1.3 + 3.4 * Math.pow(10, -0.4 * (s.mag - 1.8))) * p.s * Math.max(.7, scale * .78);
+    const al = p.a * twinkle;
+    const halo = sky.createRadialGradient(x, y, 0, x, y, r * 5.5);
+    halo.addColorStop(0, rgba(s.rgb, .42 * al)); halo.addColorStop(.35, rgba(s.rgb, .1 * al)); halo.addColorStop(1, rgba(s.rgb, 0));
+    sky.fillStyle = halo; sky.beginPath(); sky.arc(x, y, r * 5.5, 0, 7); sky.fill();
+    if (s.mag < 2.6) {
+      const len = r * (3.8 + 1.2 * twinkle);
+      for (const [dx, dy] of [[1, 0], [0, 1]]) {
+        const grad = sky.createLinearGradient(x - dx * len, y - dy * len, x + dx * len, y + dy * len);
+        grad.addColorStop(0, rgba(s.rgb, 0)); grad.addColorStop(.5, rgba(mixc(s.rgb, INK, .4), .55 * al)); grad.addColorStop(1, rgba(s.rgb, 0));
+        sky.strokeStyle = grad; sky.lineWidth = Math.max(.6, r * .22);
+        sky.beginPath(); sky.moveTo(x - dx * len, y - dy * len); sky.lineTo(x + dx * len, y + dy * len); sky.stroke();
+      }
+    }
+    const core = sky.createRadialGradient(x, y, 0, x, y, r);
+    core.addColorStop(0, rgba([255, 255, 255], al)); core.addColorStop(.45, rgba(mixc(s.rgb, INK, .3), .95 * al)); core.addColorStop(1, rgba(s.rgb, 0));
+    sky.fillStyle = core; sky.beginPath(); sky.arc(x, y, r, 0, 7); sky.fill();
+  });
+}
+
+/* ── where she is ─────────────────────────────────────────────────────── */
+
+/** In the middle, at the head of the conversation, or away among her stars. */
+function presence() {
+  const busy = Boolean(document.body.dataset.stage) || Boolean(thread.querySelector(".turn:not(.past):not(.unbidden)"));
+  const away = Her.mode === "away" && performance.now() - Her.lastActive > AWAY_AFTER_MS;
+  const mode = away ? "away" : busy ? "column" : "center";
+  if (mode === Her.mode && Her.at.set) return placeHer();
+  Her.mode = mode;
+  placeHer();
+}
+
+function placeHer() {
+  const floorEl = document.querySelector(".floor");
+  const floor = floorEl.getBoundingClientRect();
+  document.body.dataset.presence = Her.mode;
+  if (Her.mode === "column") {
+    // At the head of the conversation, over the middle of its column.
+    // A little bigger while she is pulling a face, so it reads across the room.
+    const reacting = Her.expr && performance.now() < Her.exprUntil;
+    const w = Math.max(180, Math.min(300, floor.width * .3)) * (reacting ? 1.25 : 1);
+    const col = thread.getBoundingClientRect();
+    const colW = Math.min(col.width, thread.scrollWidth || col.width);
+    Her.goal = { cx: col.left - floor.left + Math.min(colW, 560) / 2, cy: 14 + (w * 150 / 240) / 2, w };
+    document.documentElement.style.setProperty("--her-room", Math.round(w * 150 / 240 + 34) + "px");
+  } else if (Her.mode === "away") {
+    const w = Math.max(260, Math.min(560, floor.width * .42, floor.height * 1.1));
+    Her.goal = { cx: floor.width / 2, cy: floor.height * .44, w };
+  } else {
+    const w = Math.max(220, Math.min(420, floor.width * .32, floor.height * .8));
+    Her.goal = { cx: floor.width / 2, cy: floor.height * .38, w };
+  }
+  const g = Her.goal, faceBottom = floor.top + g.cy + (g.w * 150 / 240) * .4;
+  herSays.style.left = Math.round(floor.left + g.cx) + "px";
+  herSays.style.top = Math.round(faceBottom + 14) + "px";
+  herSays.classList.toggle("on", Boolean(herSays.textContent) && (Her.mode === "center" || (Her.expr && performance.now() < Her.exprUntil)));
+}
+
+/** A line she said, under her while she is in the middle. */
+function herLine(said) {
+  herSays.textContent = said;
+  placeHer();
+}
+
+new MutationObserver(presence).observe(thread, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+new MutationObserver(presence).observe(document.body, { attributes: true, attributeFilter: ["data-stage"] });
+new ResizeObserver(() => { fitSky(); placeHer(); }).observe(skyEl);
+addEventListener("keydown", awake);
+addEventListener("pointerdown", awake);
+fitSky();
+presence();
+requestAnimationFrame(drawHer);
+
+/* ── what he can do with her ─────────────────────────────────────────── */
+
+// Her face is her: pressing it is talking to her. In a room that means the
+// room's microphone takes the next thing he says as said to her, the way
+// "Hey Vela" would, so it is a spoken turn with everything that comes with
+// one. It used to press the mic key, which in a room is the mute.
+let pressedAt = 0;
+herEl.addEventListener("click", () => {
+  awake();
+  if (inRoom) {
+    setRoom({ listen: true });
+    pressedAt = Date.now();
+    if (!open && !speakingNow) setState("listening", "listening");
+    // Nothing said, nothing to show for it: the label goes back once the
+    // window a press opens has had time to close.
+    const mine = pressedAt;
+    setTimeout(() => {
+      if (pressedAt === mine && !open && !speakingNow && document.body.dataset.state === "listening") {
+        setState("idle", "with you");
+      }
+    }, 30000);
+  } else if (!micKey.hidden) micKey.click();
+  else text.focus();
+});
+herEl.addEventListener("pointermove", (e) => {
+  const r = herEl.getBoundingClientRect();
+  look(Math.max(-8, Math.min(8, ((e.clientX - r.left) / r.width - .5) * 16)), Math.max(-5, Math.min(5, ((e.clientY - r.top) / r.height - .5) * 10)), 400);
+});
+
+/* Pulled by the react tool, on her own face, where she is. Replaces whatever
+   face is up rather than queueing: two in a row means the second is true. */
+function pullFace(x) {
+  const name = x && REACTION[x.face];
+  if (!name) return;
+  awake();
+  Her.expr = name;
+  Her.exprUntil = performance.now() + 3400;
+  placeHer();
+  herEl.setAttribute("aria-label", "Vela: " + (x.caption || x.face));
+  herLine(x.caption || (Her.mode === "center" ? herSays.textContent : ""));
+  clearTimeout(Her.exprTimer);
+  Her.exprTimer = setTimeout(() => {
+    herEl.setAttribute("aria-label", "Vela. Talk to her");
+    if (x.caption && herSays.textContent === x.caption) herLine("");
+    placeHer();
+  }, 3400);
 }
 
 function listen() {
@@ -2055,14 +2690,18 @@ function listen() {
   events.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
+    awake();
     if (ev.type === "aloud") { aloud = Boolean(ev.value); drawStop(); }
     else if (ev.type === "activity") tool(ev.lines || []);
     else if (ev.type === "delta") delta(ev.text || "");
     else if (ev.type === "result") done(ev.ms, ev.text);
     else if (ev.type === "say") unbidden(ev.text || "");
     else if (ev.type === "show") showScreen(ev.screen);
+    else if (ev.type === "map") mapChanged(ev.state);
     else if (ev.type === "saying") sweepRoom(roomNext(ev.text || ""), ev.ms || 0);
     else if (ev.type === "dismissed") farewell();
+    else if (ev.type === "room") inTheRoom(ev);
+    else if (ev.type === "face") pullFace(ev.expression);
     else if (ev.type === "error") { hitch(ev.message || "Something went wrong."); open = null; doing(""); endWorks(); setState("idle", "with you"); }
   };
   // It reconnects itself. Say so, because silence is also what working looks like.

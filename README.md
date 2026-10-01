@@ -36,6 +36,7 @@ Added here (`src/tools.ts`):
 | `capture_screen` | Look at what's actually on his monitors |
 | `show_screen` / `clear_screen` | Put a page on her own screen in the hub |
 | `watch` / `list_watches` / `resolve_watch` | Keep an eye on something and speak up when it changes |
+| `remember_voice` / `forget_voice` | Save a new person's voiceprint once they say yes; forget one on request |
 
 ## Memory is an Obsidian vault
 
@@ -405,12 +406,12 @@ sentence's worth and only accepts it from the stage's own window.
 **The page never holds the master token.** A sandboxed iframe can still read
 its own URL, and she writes these pages with scripting on — some of them from
 things she read on the internet. So the iframe's URL carries a *screen key*
-instead: minted by the server, rotated on every show, and accepted by exactly
-one route, `GET /screen/file`, which serves only the file currently up. It
-cannot post a turn, open the event stream, or reach anything else. Underneath
-that, the file is served with a CSP that closes `connect-src`, forms and
-external scripts, so even a hostile page has nowhere to send whatever it
-knows — which is only itself. The hub learns the key over the master-authed
+instead: minted by the server, rotated on every show, and accepted by two
+routes: `GET /screen/file`, which serves only the file currently up, and the
+map's tiles under `/tiles`. It cannot post a turn, open the event stream, or
+reach anything else. Underneath that, the file is served with a CSP that
+closes `connect-src`, forms, external scripts and external images, so even a
+hostile page has nowhere to send whatever it knows — which is only itself. The hub learns the key over the master-authed
 channels (`/events` and `GET /screen`), where the browser page — his, not
 hers — already holds the master token.
 
@@ -429,6 +430,48 @@ within `RESTORE_WITHIN_MS` (30 minutes) — otherwise the turbofan he looked at
 this morning is still there tonight, and every time he opens her he is greeted
 by the last thing she happened to show, which reads as her not having moved
 on.
+
+## Places, on a live map
+
+Ask where to eat, for coffee, a bar, groceries or a pharmacy, and she puts a
+map on the stage: everything measured from his door. Rings mark 5, 10, 15 and
+20 minutes on foot; each place is tagged with its own walking time; open places
+are lit cyan, closed ones are not; home and whatever he picks are gold. The
+list beside it reads like a departures board, soonest first, and a picked place
+opens a card with today's hours, **Walk there** and **Ask Vela about it** —
+both come back to her as words.
+
+**The map moves; it is never redrawn.** "Expand the search" zooms the same map
+out and fills it in. "Food on Princess Street" draws the street and shows what
+is on it; "go further down" slides along it, "back" returns, "the third one"
+picks it out. The state lives in the service ([places.ts](src/places.ts)),
+changes stream to the hub as `map` events, and the hub hands them to the page
+([map.html](src/map.html)) — which, like every screen, can reach nothing
+itself.
+
+**It answers from memory.** At startup she fetches every eatery, café, bar,
+shop and pharmacy within 3.5 km, and the shape of every named street within
+2.5 km, from OpenStreetMap, in the background. Searches around home then take
+milliseconds; only somewhere further out, or the first time a far street is
+named, goes to the network. Measured: a Princess Street search took 19.8 s when
+the street was fetched at the moment it was named, and a busy server once made
+it 35 s — so streets are learned before he asks.
+
+| Piece | Where |
+|---|---|
+| Home | `data/home.json` — `{label, city, lat, lon}`, gitignored because the repo is public |
+| Places and streets | `data/places-cache.json` (a day), `data/streets-cache.json` (a week) |
+| Opening hours | Parsed from OpenStreetMap's `opening_hours`; anything it cannot read says "Hours unclear" rather than guess |
+| Tiles | OpenStreetMap, darkened in CSS, fetched by Vela and kept in `data/tiles/` (a week). CARTO's dark tiles now demand an API key |
+
+**The tiles come through her, not straight from OpenStreetMap.** The map runs
+in the stage's sandboxed frame, so it has no origin and its requests carry no
+Referer; OSM's tile policy wants every request to say who it is, and it
+answered each one with a 403 tile reading "Access blocked". The server fetches
+them instead ([tiles.ts](src/tiles.ts)), naming itself in its User-Agent and
+caching each tile on disk for the week OSM's own headers allow. The page asks
+`/tiles/z/x/y.png` with its screen key, which also let the screen's CSP drop
+the last outside image host.
 
 ## Pauses
 
@@ -726,27 +769,80 @@ recordings or a much bigger model.
 ## The wake word
 
 ```bash
-npm run serve              # she answers to her name
+npm run serve              # she answers to "Hey Vela"
 VELA_WAKE=off npm run serve
 VELA_WAKE_DEBUG=on npm run serve   # print every transcript and its level
 ```
 
-Say **"Vela, what's on my calendar"** and she answers out loud. Say just
-**"Vela"** and she says "Yes?". Only the background service does this; the
-terminal has push-to-talk, and two processes holding the same microphone is one
-of them getting silence.
+Say **"Hey Vela, what's on my calendar"** and she answers out loud. Say just
+**"Hey Vela"** and she chimes, and whatever he says next is the question. Only
+the background service does this; the terminal has push-to-talk, and two
+processes holding the same microphone is one of them getting silence.
 
-**It is not a wake-word model.** [listen.ts](src/listen.ts) used to say a wake
-word meant training one on synthetic speech, and that is still true of the
-usual approach and still not what this is. The microphone stays open, an energy
-gate cuts the room into utterances, and the whisper worker that already exists
-reads each one. What that trades is worth being plain about: a real wake model
-runs on a 30ms frame for almost no CPU, where a whisper pass costs ~0.4s and
-runs on everything said near the machine — locally, and nothing leaves it, but
-on everything. In exchange there is no model to train, no new dependency, and
-the decoder that already knows his voice does the recognising. The gate is the
-seam: put a real wake model in front of it and whisper only sees what it
-passes.
+**Her name is heard, not read.** For a month the wake word was whisper reading
+an open microphone, and it failed in both directions. `base.en` has never seen
+"Vela", so a real "Hey Vela" came back as "Hello, are you there?" and she
+ignored him; primed with the name, it wrote "Vela" into other people's
+sentences — "stick with us, Vela" — and she answered those. The openWakeWord
+model trained on synthetic "hey vella" heard 2 of his 5.
+
+[kws_worker.py](scripts/kws_worker.py) is a keyword spotter: sherpa-onnx's
+3.3M-parameter streaming recogniser, trained on 10,000 hours of GigaSpeech and
+only allowed to say the phrase. Nothing is trained for her. "Vela" does not
+have to be a word it knows — it is spelled `▁HE Y ▁ VE LA`, pieces it has seen
+thousands of times. Measured before it went in:
+
+| Condition | Heard |
+|---|---|
+| Clean "Hey Vela", 15 voices × 5 phrasings × 3 speeds | 98% |
+| At his microphone's -49 dBFS, lifted 20 dB | 93% |
+| Someone else talking 10 dB under him | 92% |
+| Someone else talking as loud as him | 40% |
+| False wakes in 5.4 hours of LibriSpeech | none |
+| Look-alike phrases ("hey bella", "umbrella", "vanilla", …) | 1–6% fire. "Hey Velma" is the one that reliably does |
+
+It fires a median 330ms after he finishes saying "Vela" (never more than
+560ms) and costs about 3% of one core.
+
+**Instant is the chime.** The worker plays it itself, with the standard
+library's `winsound`, in the same breath as it reports the detection: no pipe,
+no player to start. At the same moment the service puts the hub on screen and
+pages whisper and Kokoro back in. Idle for an hour, Windows had paged out
+all but 113MB of whisper's 1.9GB, and the first transcription took 1.07s
+against 0.53s once resident; the half second between the detection and the
+utterance closing is where that now happens.
+
+The chime replaces the spoken "Yes?" to her name alone. That line could only
+come after whisper had read the utterance, a second after the chime had already
+told him to go ahead, and she holds the microphone while she speaks — so it
+landed on top of him and cut him off. It still goes on the screen.
+`VELA_WAKE_CHIME=off` brings the spoken one back.
+
+**One detection, one sentence.** A detection belongs to the utterance it landed
+in and is spent there. It used to stay good for six seconds instead, which cut
+both ways: a request longer than that lost its address, and the sentence after
+"Hey Vela" was taken as addressed too, so "okay, what time is it" arrived as
+"time is it". If the phrase was too quiet to open the gate — the spotter hears
+further than the gate opens — nothing will ever claim the detection, so it is
+answered as her name there and then.
+
+**If the spotter will not load, she says so and falls back.** A detector that
+is present switches the transcript path off, so one that failed to start and
+was kept anyway would be an assistant deaf to her own name. The old path — her
+name looked for in what whisper wrote down — is still here for that, and is
+what `VELA_WAKE_DETECT=off` runs.
+
+Setup, once. The model lives next to the venv, not in the repo:
+
+```powershell
+uv venv $HOME\.vela-wake --python 3.14          # if it is not there already
+uv pip install --python $HOME\.vela-wake\Scripts\python.exe sherpa-onnx sentencepiece numpy
+curl.exe -L -o kws.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2
+mkdir $HOME\.vela-wake\kws; tar -xjf kws.tar.bz2 -C $HOME\.vela-wake\kws
+```
+
+Everything below still holds: the gate still cuts the room into utterances,
+and whisper still reads each one addressed to her, for the question.
 
 **Silence costs nothing.** The gate is what makes this affordable to leave on
 all day. Nothing that isn't louder than the room ever becomes an utterance, so
@@ -760,7 +856,20 @@ that speech be louder than it, falling to a quiet room quickly and rising to a
 noisy one slowly. It stops learning while he is talking — a floor that learned
 from his voice would close the gate in the middle of his sentence — and it is
 capped below where speech lives, so a fan starting up cannot raise the bar
-until she goes deaf.
+until she goes deaf. One exception to "only learns while quiet": a "sentence"
+that runs the full fifteen seconds without a pause is the room, and the floor
+moves up to the quieter part of it. Without that, a capture that opened on a
+moment of silence spent four minutes sending fifteen-second blocks of hiss to
+whisper before it learned the room.
+
+**If the room reads as pure digital zero between words, it is a noise gate,
+not a dead microphone.** On his Acer, PurifiedVoice did that, and cut any voice
+not right at the screen along with it — he had to lean in to be heard, and
+"you can go now" came back as "Even gone on". Its own console could not connect
+to its service, so Windows audio enhancements are off for the microphone
+instead (Sound control panel → Recording → Microphone Array → Advanced). Raw,
+the array hisses at about -53 dBFS, which is why `vela-service.cmd` sets
+`VELA_WAKE_FLOOR=-45` and `VELA_WAKE_MARGIN=10`.
 
 **The utterance carries the moment before it.** 600ms of pre-roll rides in
 front of the opening frame, because the wake word is the *first* thing said and
@@ -801,7 +910,7 @@ window let it through rather than her name. Answering her name alone prints
 too. Without that, the one event worth seeing when she starts answering the
 room — the mis-fire that opened the window — was the only one that was silent.
 
-**Her name is a list, not a word.** `base.en` has never heard "Vela" and
+**On the transcript path, her name is a list, not a word.** `base.en` has never heard "Vela" and
 reaches for the nearest real word, so `vella`, `veyla` and `velar` all count.
 Mishearings that are also ordinary English words — `villa`, `bella`, `wella` —
 are deliberately *not* on it: whisper really does produce them, and a name he
@@ -820,14 +929,25 @@ browser's to say, or it would be said twice.
 | Variable | Default | Meaning |
 |---|---|---|
 | `VELA_WAKE` | `on` | `off` releases the microphone entirely |
-| `VELA_WAKE_WORDS` | `vela` and its mishearings | Comma-separated; replaces the list, so it can turn one off |
-| `VELA_WAKE_FOLLOWUP` | `0` | Milliseconds she keeps listening after a turn. `0` is one address, one sentence |
-| `VELA_WAKE_FOLLOWUPS` | `1` | Nameless sentences one address buys while that window is open. This is what a mis-fire costs |
+| `VELA_WAKE_DETECT` | `on` | `off` drops the model and listens for her name in the transcript instead |
+| `VELA_WAKE_ENGINE` | `spotter` | `openwakeword` runs `VELA_WAKE_MODEL` (default `hey_jarvis`) through wake_worker.py instead |
+| `VELA_WAKE_PHRASES` | `hey vela,hey vella` | What the spotter listens for. Two spellings of one sound; the model hears them as different pieces |
+| `VELA_WAKE_BOOST` | `3.0` | How hard the search favours the phrase. Higher hears more, near-misses included |
+| `VELA_WAKE_TRIGGER` | `0.15` | How sure it must be before it fires. Lower hears more. Recall falls off a cliff by 0.25 |
+| `VELA_WAKE_GAIN` | `20` | dB of lift before the spotter listens. Only the spotter hears it |
+| `VELA_WAKE_CHIME` | `on` | `off` for her spoken "Yes?" instead, or a path to a .wav of his own |
+| `VELA_WAKE_SPOTTER_MODEL` | `~\.vela-wake\kws\sherpa-onnx-kws-…` | The model directory |
+| `VELA_WAKE_WORDS` | `vela` and its mishearings | Transcript path only. Comma-separated; replaces the list, so it can turn one off |
+| `VELA_WAKE_FOLLOWUP` | `30000` | Milliseconds she keeps listening after a turn. `0` is one address, one sentence |
+| `VELA_WAKE_FOLLOWUPS` | `6` | Nameless sentences one address buys while that window is open. This is what a mis-fire costs |
 | `VELA_WAKE_MARGIN` | `8` | dB over the room before a sound is speech. Lower hears more, including the keyboard |
 | `VELA_WAKE_FLOOR` | `-55` | The loudest the gate may believe the room is, in dBFS. Raise it after raising the microphone's input gain |
 | `VELA_WAKE_MAX` | `15000` | Longest single utterance sent to whisper |
+| `VELA_WAKE_EARLY` | `300` | Milliseconds of quiet before whisper starts reading, inside the gate's own wait. Used only if nothing loud follows; otherwise thrown away and the whole sentence read. `0` reads only after the gate closes |
 | `VELA_WAKE_ACK` | `Yes?\|I'm here.\|Right here.\|Go on.\|Yeah?\|Still here.\|Listening.` | What she says to her name alone. Several, split on `\|`, never the same twice running |
 | `VELA_WAKE_BYE` | `Okay.\|Alright.\|Sure.\|Right.` | What she says when he tells her they are finished. Same shape |
+| `VELA_WAKE_FILLER` | `One sec.\|Let me see.\|Let me check.\|Hang on.` | What she says when she is slow to start answering. `off` for never |
+| `VELA_WAKE_FILLER_AFTER` | `4000` | A safety net: milliseconds after the gate closes before a stalled answer is filled. The real trigger is her going to a tool without a word, which fills at once. See `src/filler.ts` |
 | `VELA_WAKE_DEBUG` | `off` | Print every transcript with its level and whether it woke her |
 | `VELA_SILENCE` | `0.5` | How sure whisper may be that an utterance was silence before it is thrown away. Higher lets more through |
 | `VELA_LOGPROB` | `-1.0` | How badly whisper may doubt its own words. Lower lets more through |
@@ -837,10 +957,71 @@ or she answers the television, and from outside those look identical and have
 opposite fixes. The debug line shows which is happening, and the level printed
 next to each transcript is what `VELA_WAKE_MARGIN` should be set against.
 
-"Yes?" is canned rather than a model turn on purpose. He has said one word and
+With the chime off, "Yes?" is canned rather than a model turn on purpose. He has said one word and
 is waiting to hear whether she heard it; a second and a half of thinking to
 produce "yes?" is the wrong trade, and a different acknowledgement every time
 is worse than the same one.
+
+**A conversation that ran out is logged, always.** Talking without her name
+just after the window closed prints `(not taken, 34.2s after the conversation
+ran out: …)`, or `after 6 turns without her name` when the cap closed it. From
+the outside that miss is identical to her having gone deaf, so it is never
+behind the debug switch.
+
+**Pressing her face in the hub is "Hey Vela" without the saying.** The next
+thing he says is a spoken turn, with follow-ups and "you can go now" working
+as they do after her name. Her window loads at boot, before the microphone is
+open, so the service announces the room when it comes up; the page used to
+look once, find no room, and treat the press as its own push-to-talk for the
+rest of the day.
+
+## Voices
+
+She knows people by voice. Every utterance the gate cuts is turned into a
+voiceprint by `scripts/voice_worker.py` (NeMo TitaNet-small through
+sherpa-onnx, in the wake word's venv) while whisper is still reading it, so it
+adds nothing to the wait. `src/voices.ts` compares it with the prints she has
+saved, and each spoken turn reaches the model tagged `[Voice: Yousef]`,
+`[Voice: new, not one you know]`, or with no tag when she cannot tell.
+
+A new voice is asked who it is, then asked: "Nice to meet you, Sarah. Is it
+okay to save your voiceprint in my memory, so I remember you?" Only on a yes
+does she call `remember_voice`. The prints live in the `voice` table of
+`data/vela.db` and never leave the machine.
+
+The rules, all in `src/voices.ts` and all tested:
+
+- **Saved only on that person's yes**, and only a voice that spoke *to her*.
+  The microphone hears the television too, and it is not who she just asked.
+- **A saved name is never overwritten** by a different voice. "I'm Yousef" in
+  someone else's voice is refused, not merged into him.
+- **Short is unsure, never new.** Below 1.5s of voice she does not call anyone
+  a stranger, so a quick "yes" from him is not met with "who am I speaking to?"
+- **A print improves as she uses it.** A sure match on 2s or more of voice is
+  folded into that person's print, capped so the newest sample always counts
+  for at least a thirtieth.
+
+Measured before it went in, on real speech from five people (sherpa-onnx's
+speaker-identification set). Equal error rate by length of speech:
+
+| Model | Whole clip | 2.5s | 1.5s | 1.0s | Per utterance |
+|---|---|---|---|---|---|
+| NeMo TitaNet-small (used) | 0% | 1.4% | 3.1% | 10.5% | 7ms |
+| 3D-Speaker ERes2Net | 0% | 0% | 5.0% | 8.6% | 20ms |
+| WeSpeaker ResNet34 | 11% | 18% | 23% | 28% | 18ms |
+| WeSpeaker CAM++ | 32% | 25% | 23% | 22% | 11ms |
+
+Against a print averaged from two clips, the right person scored a median 0.56
+on one second and 0.73 on two and a half; the best wrong person never passed
+0.40. Hence the lines: 0.45 and clearly ahead of the next person is them, under
+0.30 on 1.5s or more is someone new, and between is unsure. Those numbers are
+from clean recordings; the log prints every score (`you › (follow-up · Yousef
+0.62) …`) so they can be set against his real microphone.
+
+| Variable | Default | |
+|---|---|---|
+| `VELA_VOICEPRINT` | `on` | `off` stops knowing anyone by voice. Off by itself when the model is missing |
+| `VELA_VOICEPRINT_MODEL` | `~\.vela-wake\speaker\nemo_en_titanet_small.onnx` | Any sherpa-onnx speaker model. ERes2Net is as good and slower |
 
 ## Browser history
 
@@ -948,6 +1129,7 @@ src/
   config.ts    Persona, voice spec, and which skills each half is given
   repl.ts      Terminal rendering: prompts, interjections, stream deltas
   tools.ts     Exposes the above to the model as MCP tools
+  voices.ts    Who is talking: voiceprints, matching, and the rules for saving one
 tests/         Unit tests; tests/live/ needs VELA_LIVE=1
 data/
   vela.db      Memory (gitignored)
@@ -1079,3 +1261,4 @@ you add to this list, bump it.
 | 3.2.0 | She survives losing the model. A session that dies now surfaces the drop and stands itself back up instead of leaving her silently stuck, so a hit usage limit is a pause rather than a wedge. The work panel arrives with the first tool and leaves with the turn; talking over her stops her instead of reading into the mic. |
 | 3.2.1 | A keep toggle on the Work panel pins it open between turns, remembered across reloads, for watching a long run from one place. |
 | 3.3.0 | She hears the room. The service holds the microphone open and answers to her name, out loud, with no window open and nothing pressed — an energy gate keeps silence free, and the whisper worker she already had does the recognising rather than a wake model trained for it. |
+| 3.8.0 | She knows who is talking. A new voice is asked who it is and asked before its print is kept; his is refined every time she is sure. Her own resident window instead of a Chrome tab, a live map for places, faces, and greetings rendered once and played instantly. Faster everywhere: talking really runs on Sonnet now (the switch had been silently refused, so every spoken turn was Opus), whisper reads during the gate's wait instead of after it, "one sec" only when she is actually slow, and 2.6GB less memory committed. Pressing her face is "Hey Vela", a goodbye ends a longer sentence too, and a conversation that runs out on him is logged rather than looking like her going deaf. |

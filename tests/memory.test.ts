@@ -130,6 +130,30 @@ describe("projects", () => {
   });
 });
 
+describe("voices", () => {
+  test("a saved voice comes back as the numbers it was saved as", () => {
+    s.saveVoice("Sarah", [0.25, -0.5, 1], 3);
+    assert.deepEqual({ ...s.listVoices()[0] }, { name: "Sarah", print: [0.25, -0.5, 1], samples: 3 });
+  });
+
+  test("one person is one row whatever the capitals, and keeps the spelling they were saved with", () => {
+    // Her tool is handed whatever the model wrote, and "sarah" from one turn
+    // and "Sarah" from the next are the same person, not two.
+    s.saveVoice("Sarah", [1, 0], 1);
+    s.saveVoice("sarah", [0, 1], 2);
+    const rows = s.listVoices();
+    assert.equal(rows.length, 1);
+    assert.deepEqual([rows[0].name, rows[0].print], ["Sarah", [0, 1]]);
+  });
+
+  test("forgetting says whether there was anything to forget", () => {
+    s.saveVoice("Sarah", [1], 1);
+    assert.equal(s.forgetVoice("SARAH"), true);
+    assert.equal(s.forgetVoice("Sarah"), false);
+    assert.deepEqual(s.listVoices(), []);
+  });
+});
+
 describe("watches", () => {
   test("adds a watch and reports its id", () => {
     assert.equal(

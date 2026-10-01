@@ -7,6 +7,8 @@ import {
   startWakeListener,
   afterAddress,
   WAKE_WORDS,
+  LAPSED_WITHIN_MS,
+  endsInGoodbye,
 } from "../src/wake.js";
 import { SAMPLE_RATE, levelDb } from "../src/listen.js";
 import { fakeSpawner, settle } from "./helpers/proc.js";
@@ -200,11 +202,44 @@ describe("matchWake requiring a lead-in", () => {
   });
 });
 
+describe("endsInGoodbye", () => {
+  test("a goodbye after something else he said is still him leaving", () => {
+    // His two: nine and eight words, past the short-utterance limit, and both
+    // answered "Okay" while she stayed.
+    assert.equal(endsInGoodbye("Ah, don't worry about that, you can go now."), true);
+    assert.equal(endsInGoodbye("Thank you for that, you can go now"), true);
+    assert.equal(endsInGoodbye("Add milk to the shopping list, that's all."), true);
+  });
+
+  test("manners at the end of a request are not leaving, or the request is the last thing she hears", () => {
+    assert.equal(endsInGoodbye("Set a timer for ten minutes, thanks."), false);
+    assert.equal(endsInGoodbye("Can you open Netflix, thank you"), false);
+  });
+
+  test("'you can go on' in a sentence is him asking her to carry on, not to go", () => {
+    assert.equal(endsInGoodbye("I'm listening, you can go on"), false);
+  });
+
+  test("a one-word goodbye has to start its own clause", () => {
+    assert.equal(endsInGoodbye("Okay, that's great. Bye."), true);
+    assert.equal(endsInGoodbye("how do I say goodbye"), false, "a question about the word is not the word");
+  });
+
+  test("her name after the goodbye does not hide it", () => {
+    assert.equal(endsInGoodbye("Don't worry about it, you can go now, Vela."), true);
+  });
+});
+
 describe("isDismissal", () => {
   test("the phrase he actually uses to let her go", () => {
     // "go on" is what whisper wrote down for it, both times it was tried. The
     // list has to carry the transcript, not the sentence.
-    for (const said of ["you can go now", "okay you can go now", "Okay, you can go on"]) {
+    for (const said of [
+      "you can go now",
+      "okay you can go now",
+      "Okay, you can go on",
+      "Even gone on.",
+    ]) {
       assert.equal(isDismissal(said), true, `"${said}" is him finishing`);
     }
   });
@@ -234,6 +269,9 @@ describe("isDismissal", () => {
       "can you go to the kitchen and check",
       "tell me when you can go",
       "you can go through the list",
+      // "go on" is him telling her to continue, and "gone on" ends a question.
+      "go on",
+      "what's gone on",
     ]) {
       assert.equal(isDismissal(said), false, `"${said}" is not him finishing`);
     }
@@ -435,6 +473,43 @@ describe("createSegmenter", () => {
     // rather than the silence either side of it.
     assert.ok(Math.abs(said[0] - levelDb(voice(100))) < 1);
   });
+
+  test("knows when it last heard speech, without waiting for the sentence to close", () => {
+    // The early answer to her name asks "has he stopped?" a third of a second
+    // after it, long before the gate's own second of hangover would say.
+    const seg = createSegmenter(() => {});
+    assert.equal(seg.lastLoud(), -Infinity);
+    seg.push(room(1_000));
+    seg.push(voice(300));
+    assert.equal(seg.lastLoud(), 1_300, "the end of the last frame over the bar");
+    seg.push(room(200));
+    assert.equal(seg.lastLoud(), 1_300, "quiet after it does not move it");
+    assert.equal(seg.speaking(), true, "and the sentence is still open while it says so");
+  });
+});
+
+describe("createSegmenter, on a microphone with its own hiss", () => {
+  test("a floor that started below the room learns it from one cut, not minutes of them", () => {
+    // His raw microphone hisses at -53 dBFS. A capture that opens on a moment
+    // of digital silence puts the floor at the bottom, every frame after it
+    // clears the bar, and the floor never gets a quiet moment to learn in. On
+    // his tape that was four minutes of fifteen-second "sentences" of hiss.
+    const cuts: number[] = [];
+    const seg = createSegmenter((pcm) => cuts.push(pcm.length / 2 / SAMPLE_RATE), {
+      frameMs: 10,
+      preRollMs: 20,
+      minMs: 20,
+      hangoverMs: 30,
+      maxMs: 1_000,
+      floorMax: -45,
+      marginDb: 10,
+    });
+    seg.push(Buffer.alloc(320)); // one frame of digital silence as it opens
+    seg.push(tone(10_000, -53));
+    assert.equal(cuts.length, 1, "one cut of room is the evidence; the rest is the floor learning from it");
+    seg.push(Buffer.concat([tone(300, -33), tone(300, -53)]));
+    assert.equal(cuts.length, 2, "and his voice over it still opens the gate");
+  });
 });
 
 describe("afterAddress", () => {
@@ -464,6 +539,14 @@ describe("afterAddress", () => {
     // model turn.
     assert.equal(afterAddress("Hey there.", words), "");
   });
+
+  test("the same address with nothing after it and no full stop is still only the address", () => {
+    // Whisper wrote a bare "Hey Vela" as "Hey fellow", no punctuation, and the
+    // rule needed a separator after the word — so it cut nothing, and she was
+    // asked "Hey fellow" as a question.
+    assert.equal(afterAddress("Hey fellow", words), "");
+    assert.equal(afterAddress("Hey fellow what time is it", words), "what time is it");
+  });
 });
 
 describe("startWakeListener", () => {
@@ -476,15 +559,28 @@ describe("startWakeListener", () => {
     followUpMs?: number;
     followUps?: number;
     now?: () => number;
-    /** A stand-in for the wake word model. See src/detect.ts. */
-    detector?: { firedSince: () => boolean };
+    /** Give her a wake word model — a stand-in for src/detect.ts. `fire` is it hearing her. */
+    detector?: boolean;
+    /** Runs inside whisper's read, so a test can let the clock move while it reads. */
+    reading?: () => void;
+    /** Read early on a pause this long. See WAKE_EARLY_MS. Off unless given. */
+    pauseMs?: number;
   } = {}) {
     const fake = fakeSpawner();
     const commands: string[] = [];
+    const lapses: { text: string; lateMs: number; spent: boolean }[] = [];
+    /** Turns that ended with him leaving. */
+    const leaving: string[] = [];
     const names: number[] = [];
     const byes: number[] = [];
+    const woken: number[] = [];
+    /** What she was told, in the order she was told it. */
+    const order: string[] = [];
+    /** Whisper being asked to read, and the gate closing, in the order they happened. */
+    const timeline: string[] = [];
     const heard: Buffer[] = [];
     const queue = [...(opts.transcripts ?? [])];
+    let fired: ((score: number) => void) | null = null;
 
     const wake = startWakeListener({
       device: "Microphone Array",
@@ -497,21 +593,44 @@ describe("startWakeListener", () => {
         ? {
             detector: {
               push: () => {},
-              firedSince: opts.detector.firedSince,
-              lastScore: () => 0.9,
-              ready: Promise.resolve(),
+              onFire: (fn: (score: number) => void) => {
+                fired = fn;
+              },
+              firedSince: () => false,
+              lastScore: () => 1,
+              ready: Promise.resolve(true),
               stop: () => {},
             },
           }
         : {}),
-      segment: { frameMs: 10, preRollMs: 20, minMs: 20, hangoverMs: 30, maxMs: 5_000 },
+      segment: {
+        frameMs: 10,
+        preRollMs: 20,
+        minMs: 20,
+        hangoverMs: 30,
+        maxMs: 5_000,
+        ...(opts.pauseMs ? { pauseMs: opts.pauseMs } : {}),
+      },
+      onCaptured: () => timeline.push("cut"),
       hear: async (pcm) => {
         heard.push(pcm);
+        timeline.push("read");
+        opts.reading?.();
         return queue.shift() ?? "";
       },
-      onCommand: (text) => commands.push(text),
-      onName: () => names.push(1),
+      onCommand: (text, woke) => {
+        commands.push(text);
+        order.push("command");
+        if (woke.leaving) leaving.push(text);
+      },
+      onLapsed: (lapsed) => lapses.push(lapsed),
+      onName: () => {
+        names.push(1);
+        order.push("name");
+      },
       onDismiss: () => byes.push(1),
+      onWake: () => woken.push(1),
+      onAsked: () => order.push("asked"),
     });
 
     /** Push audio down the microphone's pipe, as ffmpeg would. */
@@ -523,9 +642,46 @@ describe("startWakeListener", () => {
     const utterance = async () => {
       await play(Buffer.concat([room(200), voice(200), room(200)]));
     };
+    /** The model hears her name. */
+    const fire = () => fired?.(1);
+    /**
+     * A sentence the model hears her name in: it fires part-way through, the
+     * way the real one does, a third of a second after "Vela" and before the
+     * gate has closed.
+     */
+    const addressed = async () => {
+      await play(Buffer.concat([room(200), voice(100)]));
+      fire();
+      await play(Buffer.concat([voice(100), room(200)]));
+    };
 
-    return { wake, fake, commands, names, byes, heard, play, utterance };
+    return { wake, fake, commands, lapses, leaving, names, byes, woken, order, timeline, heard, play, utterance, fire, addressed };
   }
+
+  test("a question said to her is acknowledged as it ends, before whisper has read it", async () => {
+    // His idea: answer with something ready-made while the real answer is
+    // made. Waiting for the transcript put that half a second later than it
+    // needed to be; the model firing with speech after the name already says
+    // it is a question.
+    const { wake, order, addressed } = listener({
+      transcripts: ["Hey Vela, what time is it"],
+      detector: true,
+    });
+    await addressed();
+    await until(() => order.includes("command"), "the question");
+    assert.deepEqual(order, ["asked", "command"]);
+    wake.stop();
+  });
+
+  test("her name on its own is not taken for a question, so there is nothing to fill", async () => {
+    const { wake, order, play, fire } = listener({ transcripts: ["Hey Vela."], detector: true });
+    await play(Buffer.concat([room(200), voice(200), room(10)]));
+    fire();
+    await play(room(200));
+    await until(() => order.includes("name"), "her name");
+    assert.deepEqual(order, ["name"], "a filler here would be her answering a question nobody asked");
+    wake.stop();
+  });
 
   test("with a model, what whisper wrote down has no say in whether she was addressed", async () => {
     // The whole reason for the model. base.en has never seen her name, so a
@@ -533,11 +689,11 @@ describe("startWakeListener", () => {
     // it away for not containing a name it was never going to be able to
     // spell. The model heard the phrase; the transcript only has to carry the
     // question.
-    const { wake, commands, utterance } = listener({
+    const { wake, commands, addressed } = listener({
       transcripts: ["Hello, are you there?"],
-      detector: { firedSince: () => true },
+      detector: true,
     });
-    await utterance();
+    await addressed();
     await until(() => commands.length === 1, "the command to be taken");
     assert.deepEqual(commands, ["Hello, are you there?"]);
     wake.stop();
@@ -545,15 +701,167 @@ describe("startWakeListener", () => {
 
   test("and her name in a transcript is not an address if the model never fired", async () => {
     // The other half, and the one that stops a room talking to itself. Whisper
-    // writes her name out of noise readily; without the model that was a
-    // session nobody opened.
+    // wrote her name into other people's sentences — "stick with us, Vela" —
+    // and each of those was a session nobody opened.
     const { wake, commands, utterance } = listener({
       transcripts: ["Vela, open the door."],
-      detector: { firedSince: () => false },
+      detector: true,
     });
     await utterance();
     await settle();
     assert.deepEqual(commands, [], "only the model decides she was spoken to");
+    wake.stop();
+  });
+
+  test("a detection with nothing after it is only her name, whatever whisper spelled", async () => {
+    // "Hey Vela" alone came back as "Hey fellow" and as "Hello.", and went to
+    // the model as a question. No rule about the words can fix "Hello." — it
+    // is an ordinary word — so what decides it is where the detection landed:
+    // the model fires after "Vela" ends, and when the utterance closes less
+    // than the gate's own wait after that, there was nothing more to hear.
+    const { wake, names, commands, play, fire } = listener({
+      transcripts: ["Hello."],
+      detector: true,
+    });
+    await play(Buffer.concat([room(200), voice(200), room(10)]));
+    fire();
+    await play(room(200));
+    await until(() => names.length === 1, "her name to be answered");
+    assert.deepEqual(commands, [], "an address is not a question for the model");
+    wake.stop();
+  });
+
+  test("the model firing is answered at once, before whisper has read a word", async () => {
+    // "Instant" lives here. The chime, the window and the models paging back
+    // in all hang off this, and the utterance around her name has not even
+    // closed yet — nothing that wanted to be instant can wait for a transcript.
+    const { wake, woken, heard, play, fire } = listener({ detector: true });
+    await play(Buffer.concat([room(200), voice(100)]));
+    fire();
+    assert.equal(woken.length, 1);
+    assert.equal(heard.length, 0, "no transcript exists yet, and nothing should wait for one");
+    wake.stop();
+  });
+
+  test("whisper throwing the audio away does not overrule the model hearing her name", async () => {
+    // "Hey Vela" on its own is short and scores as doubtful, so the silence bar
+    // dropped it and whisper handed back nothing. The model had heard him; she
+    // did not answer. What was said to her is the model's call, not the bar's.
+    const { wake, names, commands, addressed } = listener({ transcripts: [""], detector: true });
+    await addressed();
+    await until(() => names.length === 1, "her name to be answered");
+    assert.equal(commands.length, 0);
+    wake.stop();
+  });
+
+  test("a name too quiet to open the gate is still answered, and straight away", async () => {
+    // The spotter hears further than the loudness gate opens: it listens with
+    // 20 dB of lift and the gate does not. Called from across the room, the
+    // model fires and no utterance ever closes around it — so if nothing is in
+    // flight to claim the detection, nothing ever will.
+    const { wake, names, heard, fire } = listener({ detector: true });
+    fire();
+    assert.equal(names.length, 1);
+    assert.equal(heard.length, 0);
+    wake.stop();
+  });
+
+  test("one detection addresses one sentence, so the next keeps its first words", async () => {
+    // A detection used to stay good for six seconds, so the sentence after
+    // "Hey Vela" was addressed as well — and afterAddress, guessing where a
+    // name it could not see was, cut "okay, what" off the front of it.
+    const { wake, names, commands, addressed, utterance } = listener({
+      transcripts: ["Hey Vela.", "Okay, what time is it?"],
+      followUpMs: 30_000,
+      detector: true,
+    });
+    await addressed();
+    await until(() => names.length === 1, "her name to be answered");
+    await utterance();
+    await until(() => commands.length === 1, "the question");
+    assert.deepEqual(commands, ["Okay, what time is it?"], "said to her, whole");
+    assert.equal(names.length, 1, "and her name was answered once, not twice");
+    wake.stop();
+  });
+
+  test("her name at the start of a long sentence addresses all of it", async () => {
+    // The six seconds cut this the other way too: a request that ran longer
+    // than that closed after its own address had expired. What decides it is
+    // whether the model fired inside the sentence, however long the sentence.
+    let clock = 1_000;
+    const { wake, commands, play, fire } = listener({
+      transcripts: ["Hey Vela, and then the long part of the request"],
+      detector: true,
+      now: () => clock,
+    });
+    await play(Buffer.concat([room(200), voice(100)]));
+    fire();
+    clock += 3_000;
+    await play(Buffer.concat([voice(2_900), room(200)]));
+    await until(() => commands.length === 1, "the request");
+    assert.deepEqual(commands, ["and then the long part of the request"]);
+    wake.stop();
+  });
+
+  test("a recording of what she heard is every byte the model heard, in order", async () => {
+    // The tape exists to answer "why didn't she wake". A recording with a
+    // chunk missing, or of a different stream, answers a different question.
+    const fake = fakeSpawner();
+    const taped: Buffer[] = [];
+    const wake = startWakeListener({
+      device: "Microphone Array",
+      spawn: fake.spawn,
+      hear: async () => "",
+      onCommand: () => {},
+      onAudio: (pcm) => taped.push(Buffer.from(pcm)),
+    });
+    const sent = [room(100), voice(100), room(100)];
+    for (const pcm of sent) fake.last().proc.stdout.write(pcm);
+    await settle();
+    assert.deepEqual(Buffer.concat(taped), Buffer.concat(sent));
+    wake.stop();
+  });
+
+  /** A listener whose only interest is what it says about the microphone. */
+  const watchMic = () => {
+    const fake = fakeSpawner();
+    const problems: string[] = [];
+    const wake = startWakeListener({
+      device: "Microphone Array",
+      spawn: fake.spawn,
+      deadMs: 1_000,
+      hear: async () => "",
+      onCommand: () => {},
+      onProblem: (why) => problems.push(why),
+    });
+    const play = async (pcm: Buffer) => {
+      fake.last().proc.stdout.write(pcm);
+      await settle();
+    };
+    return { wake, problems, play, zeros: (ms: number) => Buffer.alloc(ms * 32) };
+  };
+
+  test("a microphone that has sent nothing but silence is said out loud, once, and so is its return", async () => {
+    // A muted or wedged device keeps delivering samples, all of them zero.
+    // Everything downstream works perfectly on nothing, which from his side
+    // is her ignoring him with no reason given.
+    const { wake, problems, play, zeros } = watchMic();
+    await play(zeros(3_000));
+    assert.equal(problems.length, 1, "said once, not once a chunk");
+    assert.match(problems[0], /silence/);
+    await play(room(200));
+    assert.match(problems[1] ?? "", /again/);
+    wake.stop();
+  });
+
+  test("silence after the room has been heard is his microphone's gate, not a fault", async () => {
+    // Acer PurifiedVoice cuts a quiet room to digital zero between sentences.
+    // Treated as a fault, that was a warning every time he stopped talking —
+    // and it sent the diagnosis after a broken microphone that was not broken.
+    const { wake, problems, play, zeros } = watchMic();
+    await play(room(500));
+    await play(zeros(3_000));
+    assert.deepEqual(problems, []);
     wake.stop();
   });
 
@@ -771,20 +1079,41 @@ describe("startWakeListener", () => {
     wake.stop();
   });
 
-  test("letting her go inside the detection window still lets her go", async () => {
-    // "Hey Vela" — "Yes?" — "okay, you can go now", all inside the six seconds
-    // a detection stays good for. The model says he addressed her, whisper
-    // wrote no name, and afterAddress guesses that "okay, you" was the name.
-    // Matched on what was left, the dismissal missed and she answered it as a
-    // question. It has to be matched on what he said.
-    const { wake, commands, names, byes, utterance } = listener({
-      transcripts: ["Hey Vela.", "Okay, you can go now."],
+  test("a longer sentence ending in a goodbye is answered, and then nothing more is taken", async () => {
+    // It may carry a request, so it goes to her rather than straight to a
+    // goodbye; but he has gone, so what is said after it is the room.
+    const { wake, commands, leaving, byes, utterance } = listener({
+      transcripts: [
+        "Vela, what's on my calendar",
+        "Ah, don't worry about that, you can go now.",
+        "so anyway, Friday",
+      ],
       followUpMs: 30_000,
-      detector: { firedSince: () => true },
     });
     await utterance();
-    await until(() => names.length === 1, "her name to be answered");
+    await until(() => commands.length === 1, "the address");
     await utterance();
+    await until(() => commands.length === 2, "the sentence he left on");
+    assert.deepEqual(leaving, ["Ah, don't worry about that, you can go now."]);
+    assert.equal(byes.length, 0, "not an instant goodbye: she answers it first");
+    await utterance();
+    await settle();
+    assert.equal(commands.length, 2, "the conversation closed with that sentence");
+    wake.stop();
+  });
+
+  test("a goodbye in the same breath as her name still lets her go", async () => {
+    // "Hey Vela, you can go now", which whisper wrote as "Okay, you can go now."
+    // The model says he addressed her, the transcript carries no name, and
+    // afterAddress guesses that "okay, you" was it. Matched on what was left,
+    // the dismissal missed and she answered it as a question. It has to be
+    // matched on what he said.
+    const { wake, commands, byes, addressed } = listener({
+      transcripts: ["Okay, you can go now."],
+      followUpMs: 30_000,
+      detector: true,
+    });
+    await addressed();
     await until(() => byes.length === 1, "the goodbye");
     assert.deepEqual(commands, [], "a goodbye is not a question for the model");
     wake.stop();
@@ -812,6 +1141,231 @@ describe("startWakeListener", () => {
       "what about the second one",
       "a window that runs down while she is still talking is never open when he replies",
     );
+    wake.stop();
+  });
+
+  test("a reply he started inside the window is his, however long whisper took to read it", async () => {
+    // The window used to be asked about once the transcript came back. A
+    // sentence begun with a second to spare, and read in two, arrived after
+    // the deadline and was dropped as the room.
+    let clock = 1_000;
+    let slow = false;
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Vela, what's on my calendar", "and what about tomorrow"],
+      followUpMs: 5_000,
+      now: () => clock,
+      reading: () => {
+        if (slow) clock += 2_000;
+      },
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    clock += 4_000;
+    slow = true;
+    await utterance();
+    await until(() => commands.length === 2, "the reply");
+    assert.equal(commands[1], "and what about tomorrow");
+    wake.stop();
+  });
+
+  test("a sentence just after the window ran out is reported, with how late it was", async () => {
+    // The miss that looks exactly like her breaking: she was talking to him a
+    // moment ago and now she is not. Unreported, it cannot be told apart in the
+    // log from her having gone deaf, and an afternoon went on not knowing which.
+    let clock = 1_000;
+    const { wake, commands, lapses, utterance } = listener({
+      transcripts: ["Vela, what's on my calendar", "so what's for dinner"],
+      followUpMs: 5_000,
+      now: () => clock,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    clock += 9_000;
+    await utterance();
+    await until(() => lapses.length === 1, "the lapse to be reported");
+    assert.equal(commands.length, 1, "reported, not taken: the window still means what it meant");
+    assert.equal(lapses[0].text, "so what's for dinner");
+    assert.equal(lapses[0].spent, false);
+    assert.ok(lapses[0].lateMs > 0 && lapses[0].lateMs <= 4_000, `late by ${lapses[0].lateMs}ms`);
+    wake.stop();
+  });
+
+  test("a window closed by the cap says so, rather than looking like time ran out", async () => {
+    const { wake, commands, lapses, utterance } = listener({
+      transcripts: ["Vela, what's on my calendar", "and tomorrow", "and the day after"],
+      followUpMs: 30_000,
+      followUps: 1,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    await utterance();
+    await until(() => commands.length === 2, "the one follow-up");
+    await utterance();
+    await until(() => lapses.length === 1, "the lapse to be reported");
+    assert.equal(lapses[0].spent, true, "the two need different fixes: one is the timer, one is the cap");
+    wake.stop();
+  });
+
+  test("a conversation he ended is not reported as one that ran out on him", async () => {
+    const { wake, lapses, byes, utterance } = listener({
+      transcripts: ["Vela, open Netflix", "okay thank you, we're done", "did you see the game"],
+      followUpMs: 30_000,
+    });
+    await utterance();
+    await utterance();
+    await until(() => byes.length === 1, "the goodbye");
+    await utterance();
+    await settle();
+    assert.deepEqual(lapses, [], "after a goodbye, the room is just the room");
+    wake.stop();
+  });
+
+  test("the room long after a conversation is not reported, or the log becomes a transcript of it", async () => {
+    let clock = 1_000;
+    const { wake, lapses, commands, utterance } = listener({
+      transcripts: ["Vela, open Netflix", "did you see the game"],
+      followUpMs: 5_000,
+      now: () => clock,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    clock += 5_000 + LAPSED_WITHIN_MS + 1_000;
+    await utterance();
+    await settle();
+    assert.deepEqual(lapses, []);
+    wake.stop();
+  });
+
+  test("pressing her opens a conversation without her name", async () => {
+    // Her face on the screen is the other way of saying "Hey Vela". It used to
+    // be a mute in a room, and in a hub that had not learned it was in one it
+    // was a push-to-talk that went round the wake word entirely.
+    const { wake, commands, utterance } = listener({
+      transcripts: ["what's the weather", "what's the weather"],
+      followUpMs: 30_000,
+    });
+    await utterance();
+    await settle();
+    assert.equal(commands.length, 0, "before the press, a nameless sentence is the room");
+    wake.open();
+    await utterance();
+    await until(() => commands.length === 1, "the sentence after the press");
+    assert.equal(commands[0], "what's the weather");
+    wake.stop();
+  });
+
+  test("pressed while she is talking, the window starts when she stops", async () => {
+    let clock = 1_000;
+    const { wake, commands, utterance } = listener({
+      transcripts: ["and what about tomorrow"],
+      followUpMs: 5_000,
+      now: () => clock,
+    });
+    wake.hold();
+    wake.open();
+    clock += 30_000;
+    wake.resume();
+    await utterance();
+    await until(() => commands.length === 1, "the sentence after she stopped");
+    wake.stop();
+  });
+
+  test("whose voice it was is asked when the gate cuts the sentence, and handed over with the turn", async () => {
+    // Asked at the cut, it is worked out in the half second whisper is taking
+    // anyway. Asked once the transcript said it was a turn, it would be added
+    // to every answer's wait.
+    const fake = fakeSpawner();
+    let askedBeforeReading = false;
+    let asked = 0;
+    const whos: unknown[] = [];
+    const sarah = { kind: "known" as const, name: "Sarah", score: 0.7, speech: 2 };
+    const wake = startWakeListener({
+      device: "Microphone Array",
+      spawn: fake.spawn,
+      segment: { frameMs: 10, preRollMs: 20, minMs: 20, hangoverMs: 30, maxMs: 5_000 },
+      who: async () => {
+        asked++;
+        return sarah;
+      },
+      hear: async () => {
+        askedBeforeReading = asked === 1;
+        return "Vela, what time is it";
+      },
+      onCommand: (_text, woke) => void woke.who.then((w) => whos.push(w)),
+    });
+    fake.last().proc.stdout.write(Buffer.concat([room(200), voice(200), room(200)]));
+    await until(() => whos.length === 1, "the turn, with its voice");
+    assert.equal(askedBeforeReading, true);
+    assert.deepEqual(whos, [sarah]);
+    wake.stop();
+  });
+
+  test("a sentence with nothing after it is read once, and the read starts before the gate closes", async () => {
+    // The point of reading early: the second the gate waits to be sure he has
+    // stopped is spent reading, so the transcript is there when it closes.
+    const { wake, commands, timeline, utterance } = listener({
+      transcripts: ["Vela, what time is it"],
+      pauseMs: 10,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the command");
+    assert.deepEqual(timeline, ["read", "cut"], "read once, before the close, and that read is the one used");
+    assert.equal(commands[0], "what time is it");
+    wake.stop();
+  });
+
+  test("carrying on after a pause throws the early read away, so starting early never costs a word", async () => {
+    // "Vela, what time is it ... in Tokyo". The read taken at the pause has
+    // only the first half; the one taken after the last word has all of it.
+    const { wake, commands, play } = listener({
+      transcripts: ["Vela, what time is it", "Vela, what time is it in Tokyo"],
+      pauseMs: 10,
+    });
+    await play(Buffer.concat([room(200), voice(100), room(10), voice(100), room(200)]));
+    await until(() => commands.length === 1, "the command");
+    assert.equal(commands[0], "what time is it in Tokyo");
+    wake.stop();
+  });
+
+  test("talking on after a pause until the length limit cuts it reads the whole thing, not the part before the pause", async () => {
+    // Every other close passes through a fresh pause first, and that newer
+    // read replaces the old. A sentence cut at the limit closes mid-word,
+    // with no pause after the last word, so the only early read is the stale
+    // one from the middle, and it must not stand in for the sentence.
+    const { wake, commands, play } = listener({
+      transcripts: ["Vela, the first half", "Vela, the first half and all of the rest"],
+      pauseMs: 10,
+    });
+    await play(Buffer.concat([room(200), voice(100), room(10), voice(5_200)]));
+    await until(() => commands.length === 1, "the cut sentence");
+    assert.equal(commands[0], "the first half and all of the rest");
+    wake.stop();
+  });
+
+  test("an early read of a sentence she stopped hearing is never handed to the next one", async () => {
+    // She started talking mid-sentence and held the microphone, so that
+    // sentence is gone, read half-way. The next one must be read for itself.
+    // It is too short to be read early on its own pause, so the only early
+    // read in existence is the stale one, and it must go unused.
+    const { wake, commands, heard, play } = listener({
+      transcripts: ["Vela, the stale half", "Vela, the sentence he just said"],
+      pauseMs: 10,
+    });
+    await play(Buffer.concat([room(200), voice(100), room(10)]));
+    await until(() => heard.length === 1, "the early read of the first sentence");
+    wake.hold();
+    wake.resume();
+    await play(Buffer.concat([room(200), voice(20), room(200)]));
+    await until(() => commands.length === 1, "the second sentence");
+    assert.equal(commands[0], "the sentence he just said");
+    wake.stop();
+  });
+
+  test("with reading early off, whisper reads after the gate closes, as it always did", async () => {
+    const { wake, commands, timeline, utterance } = listener({ transcripts: ["Vela, what time is it"] });
+    await utterance();
+    await until(() => commands.length === 1, "the command");
+    assert.deepEqual(timeline, ["cut", "read"]);
     wake.stop();
   });
 
@@ -862,6 +1416,253 @@ describe("startWakeListener", () => {
     await settle();
     await settle();
     assert.equal(fake.spawned.length, 1, "a listener that reopens on its own shutdown never shuts down");
+  });
+});
+
+describe("startWakeListener, answering her name the moment he stops", () => {
+  /**
+   * A listener with a model, and a gate that waits longer than the quiet the
+   * early answer needs — the real one waits a second, the model fires a third
+   * of a second after her name. The shared helper above closes utterances in
+   * 30ms, which is shorter than the model takes, so it cannot show this.
+   */
+  function early(opts: { transcripts?: string[]; now?: () => number; hangoverMs?: number; slowHear?: boolean } = {}) {
+    const fake = fakeSpawner();
+    const names: boolean[] = [];
+    const commands: string[] = [];
+    const asked: number[] = [];
+    const missed: Buffer[][] = [];
+    const heard: Buffer[] = [];
+    const queue = [...(opts.transcripts ?? [])];
+    let release: (() => void) | null = null;
+    let fired: ((score: number) => void) | null = null;
+
+    const wake = startWakeListener({
+      device: "Microphone Array",
+      spawn: fake.spawn,
+      reopenMs: [0],
+      followUpMs: 30_000,
+      ...(opts.now ? { now: opts.now } : {}),
+      detector: {
+        push: () => {},
+        onFire: (fn: (score: number) => void) => {
+          fired = fn;
+        },
+        firedSince: () => false,
+        lastScore: () => 1,
+        ready: Promise.resolve(true),
+        stop: () => {},
+      },
+      segment: { frameMs: 10, preRollMs: 20, minMs: 20, hangoverMs: opts.hangoverMs ?? 600, maxMs: 5_000 },
+      nameQuietMs: 200,
+      nameWatchMs: 200,
+      hear: async (pcm) => {
+        heard.push(pcm);
+        if (opts.slowHear) await new Promise<void>((r) => (release = r));
+        return queue.shift() ?? "";
+      },
+      onCommand: (text) => commands.push(text),
+      onName: (_word, how) => names.push(how.paused),
+      onAsked: () => asked.push(1),
+      onMissed: (clips) => missed.push(clips.map((c) => c.pcm)),
+    });
+
+    const play = async (pcm: Buffer) => {
+      fake.last().proc.stdout.write(pcm);
+      await settle();
+    };
+    const fire = () => fired?.(1);
+    /** "Hey Vela", and the quiet the model fires in, 250ms after it. */
+    const name = async () => {
+      await play(Buffer.concat([room(200), voice(200), room(250)]));
+      fire();
+    };
+    return { wake, names, commands, asked, missed, heard, play, fire, name, release: () => release?.() };
+  }
+
+  test("her name and then quiet is answered before the sentence closes, and never reaches whisper", async () => {
+    // The gap he heard. The chime came instantly and then nothing, because
+    // the bare name was only known once the gate's second of hangover had
+    // passed and whisper had read it. Answered here, the greeting can be
+    // played half a second after he stops. And whisper never sees it, which
+    // is what sent "Hey fellow" to the model as a question.
+    const { wake, names, heard, name, play } = early({ transcripts: ["Hey fellow"] });
+    await name();
+    assert.deepEqual(names, [], "200ms of quiet before the model fired is not yet enough");
+    await play(room(250));
+    assert.deepEqual(names, [true], "answered, and marked as him having stopped");
+    await play(room(1_000));
+    assert.equal(heard.length, 0, "the name's own audio is spent, not transcribed");
+    wake.stop();
+  });
+
+  test("speech after the detection means a question is coming, and the transcript decides", async () => {
+    // The case the early answer must never take: "Hey Vela, what time is it"
+    // with a breath after the name. A greeting there plays over his question,
+    // and the microphone she holds while she speaks would cut it off.
+    const { wake, names, commands, asked, name, play } = early({
+      transcripts: ["Hey Vela, what time is it?"],
+    });
+    await name();
+    await play(Buffer.concat([voice(150), room(700)]));
+    await until(() => commands.length === 1, "the question");
+    assert.deepEqual(names, [], "no answer to her name over the top of him");
+    assert.deepEqual(commands, ["what time is it?"]);
+    assert.equal(asked.length, 1, "and it is still filled as a question");
+    wake.stop();
+  });
+
+  test("a detection that lands before he has been quiet long enough waits for the transcript", async () => {
+    // The bar is measured at the moment the model fires. A detection inside a
+    // pause shorter than that could be the comma in "Hey Vela, what...", so it
+    // is not treated as him stopping; the slow path still answers the name,
+    // flagged so the service puts it on screen rather than speak over him.
+    const { wake, names, play, fire } = early({ transcripts: ["Hey Vela."] });
+    await play(Buffer.concat([room(200), voice(200), room(100)]));
+    fire();
+    await play(room(700));
+    await until(() => names.length === 1, "her name");
+    assert.deepEqual(names, [false]);
+    wake.stop();
+  });
+
+  test("a name answered early is not answered again when whisper catches up with it", async () => {
+    // Only reachable with a gate that closes faster than the model fires:
+    // the utterance holding the name is already with whisper when it is
+    // answered. Read late, "Hey fellow" falls inside the window the answer
+    // opened, and without this it goes to the model as a nameless question.
+    const { wake, names, commands, missed, name, play, release } = early({
+      transcripts: ["Hey fellow"],
+      hangoverMs: 30,
+      slowHear: true,
+    });
+    await name();
+    await play(room(250));
+    assert.deepEqual(names, [true]);
+    release();
+    await settle();
+    assert.deepEqual(commands, [], "her name is not a question for the model");
+    assert.deepEqual(names, [true], "and it is answered once");
+    assert.deepEqual(missed, [], "the name's own audio is not an earlier attempt at it");
+    wake.stop();
+  });
+
+  test("her starting to speak mid-watch abandons the early answer", async () => {
+    // A hold means her own voice is about to fill the room. Answering her name
+    // after it, out of a watch that started before, would be her talking over
+    // herself.
+    const { wake, names, name, play } = early();
+    await name();
+    wake.hold();
+    wake.resume();
+    await play(room(250));
+    assert.deepEqual(names, []);
+    wake.stop();
+  });
+});
+
+describe("startWakeListener, keeping the attempts she missed", () => {
+  /** The same listener, on a clock the test moves. */
+  function missing(transcripts: string[], followUpMs = 8_000) {
+    let clock = 1_000;
+    const fake = fakeSpawner();
+    const missed: Buffer[][] = [];
+    const heard: Buffer[] = [];
+    const commands: string[] = [];
+    const queue = [...transcripts];
+    let fired: ((score: number) => void) | null = null;
+    const wake = startWakeListener({
+      device: "Microphone Array",
+      spawn: fake.spawn,
+      followUpMs,
+      now: () => clock,
+      detector: {
+        push: () => {},
+        onFire: (fn: (score: number) => void) => {
+          fired = fn;
+        },
+        firedSince: () => false,
+        lastScore: () => 1,
+        ready: Promise.resolve(true),
+        stop: () => {},
+      },
+      segment: { frameMs: 10, preRollMs: 20, minMs: 20, hangoverMs: 600, maxMs: 5_000 },
+      nameQuietMs: 200,
+      nameWatchMs: 200,
+      hear: async (pcm) => {
+        heard.push(pcm);
+        return queue.shift() ?? "";
+      },
+      onCommand: (text) => commands.push(text),
+      onMissed: (clips) => missed.push(clips.map((c) => c.pcm)),
+    });
+    const play = async (pcm: Buffer) => {
+      fake.last().proc.stdout.write(pcm);
+      await settle();
+    };
+    /** Something said that the model did not fire on. */
+    const unheard = async () => {
+      await play(Buffer.concat([room(200), voice(300), room(700)]));
+      await until(() => heard.length > 0, "whisper to read it");
+    };
+    /** Her name, heard, and answered early. */
+    const name = async () => {
+      await play(Buffer.concat([room(200), voice(200), room(250)]));
+      fired?.(1);
+      await play(room(250));
+    };
+    return { wake, missed, heard, commands, play, unheard, name, later: (ms: number) => (clock += ms) };
+  }
+
+  test("the attempt just before the one she heard is kept, as the audio the model was given", async () => {
+    // "I have to say it twice." The second one woke her; the first is the
+    // miss, and it is only worth anything for tuning if it is exactly what
+    // the model heard, which is the same bytes the gate handed whisper.
+    const { wake, missed, heard, unheard, name, later } = missing(["Hey fellow"]);
+    await unheard();
+    later(3_000);
+    await name();
+    assert.equal(missed.length, 1);
+    assert.deepEqual(missed[0], [heard[0]]);
+    wake.stop();
+  });
+
+  test("what he said to her inside a conversation is not a miss", async () => {
+    // A follow-up was a turn she took, not her failing to hear her name.
+    // Inside an open session the name is optional, so nothing he says there
+    // is evidence about the model at all.
+    const { wake, missed, commands, play, name, later } = missing(["what time is it?"]);
+    await name();
+    later(1_000);
+    await play(Buffer.concat([room(200), voice(300), room(700)]));
+    await until(() => commands.length === 1, "the follow-up");
+    later(2_000);
+    await name();
+    assert.deepEqual(missed, []);
+    wake.stop();
+  });
+
+  test("an attempt more than ten seconds before is not this one", async () => {
+    const { wake, missed, unheard, name, later } = missing(["something else entirely"]);
+    await unheard();
+    later(12_000);
+    await name();
+    assert.deepEqual(missed, []);
+    wake.stop();
+  });
+
+  test("a miss is kept once, not again by the next time she hears her name", async () => {
+    // The second call comes after the first conversation has lapsed and while
+    // the miss is still inside ten seconds, so the only thing stopping it being
+    // kept twice is that it was already kept.
+    const { wake, missed, unheard, name, later } = missing(["Hey fellow"], 1_000);
+    await unheard();
+    later(2_000);
+    await name();
+    later(3_000);
+    await name();
+    assert.equal(missed.length, 1);
+    wake.stop();
   });
 });
 

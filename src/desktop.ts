@@ -30,7 +30,9 @@ export function q(value: string): string {
 
 /** Known shortcuts so the model doesn't have to guess launch strings. */
 export const APP_ALIASES: Record<string, string> = {
-  netflix: "netflix://",
+  // The netflix:// protocol activates and dies silently when the Store app is
+  // broken, which reads as success. The site always opens.
+  netflix: "https://www.netflix.com",
   spotify: "spotify:",
   youtube: "https://www.youtube.com",
   chrome: "chrome.exe",
@@ -44,7 +46,6 @@ export const APP_ALIASES: Record<string, string> = {
 
 /** Web versions to fall back on when a protocol handler isn't registered. */
 export const WEB_FALLBACKS: Record<string, string> = {
-  netflix: "https://www.netflix.com",
   spotify: "https://open.spotify.com",
 };
 

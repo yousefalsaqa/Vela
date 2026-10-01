@@ -116,10 +116,27 @@ export function respondToRequests(
       const line = buffered.slice(0, cut).trim();
       buffered = buffered.slice(cut + 1);
       if (!line) continue;
-      const reply = handler(JSON.parse(line));
-      if (reply !== undefined) proc.say(reply);
+      const request = JSON.parse(line) as Record<string, string>;
+      const reply = handler(request);
+      if (reply === undefined) continue;
+      // A worker that names its replies (whisper) echoes the request's id,
+      // as the real one does. The handler need not know: it writes the reply
+      // as it would, and this puts the id into it.
+      proc.say(request.id === undefined ? reply : withId(reply, request.id));
     }
   });
+}
+
+/** `ok {...}` or `err ...` with the request's id put in, the way an id-echoing worker writes it. */
+function withId(reply: string, id: unknown): string {
+  const space = reply.indexOf(" ");
+  const status = reply.slice(0, space);
+  const rest = reply.slice(space + 1);
+  try {
+    return `${status} ${JSON.stringify({ id, ...(JSON.parse(rest) as object) })}`;
+  } catch {
+    return `${status} ${JSON.stringify({ id, error: rest })}`;
+  }
 }
 
 /** Let queued promises settle. */
