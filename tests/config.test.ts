@@ -13,6 +13,7 @@ import {
   claudeBinaryDir,
   ensureClaudeOnPath,
   portFrom,
+  firstPresent,
 } from "../src/config.js";
 
 /**
@@ -32,6 +33,20 @@ function skillsDir(entries: Record<string, "skill" | "folder" | "file">): string
   }
   return dir;
 }
+
+suite("firstPresent", () => {
+  test("takes the GPU voice when it is installed, because it is five to eight times faster", () => {
+    assert.equal(firstPresent(["gpu", "cpu"], (p) => p === "gpu" || p === "cpu"), "gpu");
+  });
+
+  test("falls back to the CPU voice when the GPU one is not there, so she is never left mute", () => {
+    assert.equal(firstPresent(["gpu", "cpu"], (p) => p === "cpu"), "cpu");
+  });
+
+  test("names the last choice when nothing is installed, so the warning points at the usual place", () => {
+    assert.equal(firstPresent(["gpu", "cpu"], () => false), "cpu");
+  });
+});
 
 suite("discoverSkills", () => {
   test("finds every folder with a SKILL.md in it", () => {

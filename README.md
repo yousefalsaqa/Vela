@@ -596,10 +596,36 @@ Three engines, one env var apart:
 | `sapi` | built-in Windows voices | nothing; sounds like 2003 |
 
 Kokoro is the default because the cloud voices have an even, over-articulated
-cadence that gives them away. It runs on CPU — the GPU is worth nothing at
-these lengths and is better left for other things. A [warm
-worker](scripts/kokoro_worker.py) holds the model so the 1.2s load is paid once
-at startup rather than per sentence, and it only exists while voice is on.
+cadence that gives them away. A [warm worker](scripts/kokoro_worker.py) holds
+the model so the 1.2s load is paid once at startup rather than per sentence,
+and it only exists while voice is on.
+
+**On the GPU when there is one.** This README used to say the GPU was worth
+nothing at these lengths. Measured through the worker on his RTX 5060 laptop
+GPU, it is worth most of the gap between her first word being written and him
+hearing it:
+
+| Sentence | CPU (24 threads) | GPU |
+|---|---|---|
+| "Yeah, you sound like Yousef." | 376-449ms | 55-111ms |
+| Two sentences, 9 words | 595-676ms | 65-89ms |
+
+The cost is ~1.2GB more RAM (CUDA's libraries), 720MB of video memory, and an
+NVIDIA chip kept awake, which is fine on a machine that is mostly plugged in.
+cuDNN off saved almost nothing and tripled the time. She uses
+`~\.vela-tts-gpu` when it exists and `~\.vela-tts` otherwise. Built with the
+driver's CUDA 12.9 in mind (torch's CUDA 13 builds need a newer driver):
+
+```bash
+uv pip freeze --python ~/.vela-tts/Scripts/python.exe | grep -v '^torch==' > req.txt
+echo "torch==2.11.0+cu128" >> req.txt
+uv venv ~/.vela-tts-gpu --python 3.14
+uv pip install --python ~/.vela-tts-gpu/Scripts/python.exe -r req.txt \
+  --extra-index-url https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
+```
+
+Delete `~\.vela-tts-gpu`, or point `VELA_KOKORO_PYTHON` at the CPU venv, to
+go back.
 
 | Variable | Default | Meaning |
 |---|---|---|

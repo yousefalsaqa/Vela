@@ -293,9 +293,30 @@ export const KOKORO_SPEED = Number(process.env.VELA_KOKORO_SPEED ?? "1.1");
  * waiting on.
  */
 export const VOICE_GAP_MS = Number(process.env.VELA_VOICE_GAP ?? "150");
+/** The first of these that exists, or the last one when none do. */
+export function firstPresent(paths: string[], exists: (path: string) => boolean = existsSync): string {
+  return paths.find((p) => exists(p)) ?? paths[paths.length - 1];
+}
+
+/**
+ * Kokoro's Python: the GPU venv when it is installed, the CPU one otherwise.
+ *
+ * Measured on 2026-10-01 through the worker, on his RTX 5060 laptop GPU: a
+ * sentence in 55-111ms against 277-676ms on the CPU, which is most of the
+ * wait between her first word being written and him hearing it. It costs
+ * ~1.2GB more RAM (CUDA's libraries, 2.4GB vs 1.1GB working set) and 720MB
+ * of video memory, and it keeps the NVIDIA chip awake, so it is for a
+ * machine that is mostly plugged in, which this one is. Switching cuDNN off
+ * saved almost nothing and tripled the time. Build it with the commands in
+ * README, "Speaking"; delete ~/.vela-tts-gpu, or set VELA_KOKORO_PYTHON, to
+ * go back to the CPU.
+ */
 export const KOKORO_PYTHON =
   process.env.VELA_KOKORO_PYTHON ??
-  join(process.env.USERPROFILE ?? "", ".vela-tts", "Scripts", "python.exe");
+  firstPresent([
+    join(process.env.USERPROFILE ?? "", ".vela-tts-gpu", "Scripts", "python.exe"),
+    join(process.env.USERPROFILE ?? "", ".vela-tts", "Scripts", "python.exe"),
+  ]);
 export const VOICE_NAME =
   process.env.VELA_VOICE_NAME ??
   (VOICE_ENGINE === "neural" ? "en-GB-LibbyNeural" : undefined);
