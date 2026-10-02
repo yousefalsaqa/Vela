@@ -567,6 +567,7 @@ async function main() {
       if ((event.type === "delta" || event.type === "result") && clock && !clock.thought) {
         clock.thought = Date.now();
       }
+      if (event.type === "delta") repliedThisTurn = true;
       // Her reply has begun, so there is no silence left to fill; or she has
       // gone to a tool without a word, and the silence is going to be long.
       if (event.type === "delta" || event.type === "result") filler.started();
@@ -807,6 +808,8 @@ async function main() {
 
     /** What his next turn says about the one he cut off. See talkedOver. */
     let overHer: string | null = null;
+    /** She had started her reply when he talked over it, rather than still thinking. */
+    let repliedThisTurn = false;
 
     /**
      * He talked over her. The same three things the hub's cut does (stop the
@@ -820,8 +823,11 @@ async function main() {
      * asking, and the model is told that instead of that it went on too long.
      */
     const talkedOver = (lead: Buffer, loudness: number) => {
-      if (!answering) return;
-      const spoke = Boolean(clock?.thought);
+      // Not "answering": that ends when the model has finished writing, and
+      // most of what he hears of a reply is played after that. The watcher
+      // is only armed while she holds the microphone to speak, so it firing
+      // is the whole of the evidence that she is.
+      const spoke = repliedThisTurn;
       console.log(`  \x1b[90m(he talked over her${spoke ? "" : " before she answered"} · ${loudness.toFixed(0)} dBFS)\x1b[0m`);
       overHer = spoke ? CUT_OFF : CARRIED_ON;
       cutTurn = true;
@@ -849,6 +855,7 @@ async function main() {
       : null;
 
     const toModel = (text: string, woke: WakeTrigger, how: string) => {
+      repliedThisTurn = false;
       listener.hold();
       if (hearing) barge?.arm();
       answering = true;
