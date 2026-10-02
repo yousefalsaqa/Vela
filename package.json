@@ -12,6 +12,7 @@
     "check:room": "tsx scripts/room-harness.ts",
     "dev": "tsx src/index.ts",
     "serve": "tsx src/serve.ts",
+    "restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restart.ps1",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
