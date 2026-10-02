@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { bare, tvIntent, couldBeLaptop, worked, didLine, STEP, type TvIntent } from "../src/shortcuts.js";
+import { bare, tvIntent, shortcutFor, couldBeLaptop, worked, didLine, STEP, type TvIntent } from "../src/shortcuts.js";
 
 describe("bare", () => {
   test("takes the politeness off both ends, however much of it there is", () => {
@@ -69,6 +69,22 @@ describe("tvIntent", () => {
     ]) {
       assert.equal(tvIntent(said), null, `"${said}" was taken as a TV command`);
     }
+  });
+});
+
+describe("shortcutFor", () => {
+  test("said with her name, a TV command is done directly", () => {
+    assert.deepEqual(shortcutFor("pause it", { followUp: false, leaving: false }), { kind: "remote", button: "pause" });
+  });
+
+  test("without her name it goes to the model, since he may be talking to someone else in the room", () => {
+    // His rule: "pause" said to a friend in the seconds after she answered
+    // must not stop the TV, silently and at once.
+    assert.equal(shortcutFor("pause it", { followUp: true, leaving: false }), null);
+  });
+
+  test("a command he leaves on goes to the model, so the goodbye is answered too", () => {
+    assert.equal(shortcutFor("turn off the TV", { followUp: false, leaving: true }), null);
   });
 });
 

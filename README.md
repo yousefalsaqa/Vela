@@ -1035,6 +1035,19 @@ have caused. After a few days of his real speech the threshold
 utterance the moment a guess says done. Sentences that weren't said to her
 are written down marked `toHer: false`, so the TV doesn't set his threshold.
 
+**Warm before he asks.** Every turn sends about 30,000 tokens, nearly all
+of it cached, and a warm turn's first word comes 0.6s after it is sent. But
+Anthropic keeps that cache five minutes, so the first answer of every
+conversation found it gone: after six idle minutes a turn rewrote 4,836
+tokens where one after thirty seconds rewrote 72, and answered 0.7 to 1.2s
+later for it. So the moment the wake word hears her name, if the model has
+been idle four minutes, `core.warm()` sends a silent turn ("reply with only:
+ok") on the talking model. It runs while he is still talking and whisper is
+reading, and his question lands on a warm cache. Nothing of it is shown or
+said, and his turn is always queued behind it, never ahead: answered in
+order, a warm-up behind his turn would have its "ok" spoken and his answer
+swallowed. One small model call per conversation, not per turn.
+
 The model goes in `~/.vela-turn/` (`VELA_TURN_MODEL` to move it):
 
 ```
@@ -1139,8 +1152,10 @@ the TV", "resume my show"), does it directly, and stays quiet when it worked:
 the TV doing it is the answer. When it didn't, she says why. Only the whole
 utterance counts, politeness aside; "pause it, I want to ask you something"
 goes to the model as before, because a wrong shortcut does something to his TV
-he didn't ask for. A bare "pause" or "play" could be Spotify, so it is only
-taken when the TV is on. The model is told what she did on his next turn, so
+he didn't ask for. Only with her name ("Vela, pause"): in the seconds after she
+answers she listens without it, and "pause" said to a friend then should not
+stop the TV silently, so a nameless one goes to the model. A bare "pause" or
+"play" could be Spotify, so it is only taken when the TV is on. The model is told what she did on his next turn, so
 it isn't a secret from her. `VELA_TV_SHORTCUTS=off` sends everything to the
 model.
 

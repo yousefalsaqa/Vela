@@ -21,7 +21,7 @@ import { kokoroSynth, synthSpeaker, createVoice, speakable, PRONOUNCE_PHONEMES }
 import { startWakeListener, type WakeListener, type TurnNote, type WakeTrigger } from "./wake.js";
 import { createTurnJudge } from "./turn.js";
 import { tv } from "./tv.js";
-import { tvIntent, couldBeLaptop, worked, didLine, type TvIntent } from "./shortcuts.js";
+import { shortcutFor, couldBeLaptop, worked, didLine, type TvIntent } from "./shortcuts.js";
 import { openDetector, openSpotter, type WakeDetector } from "./detect.js";
 import { places } from "./places.js";
 import { createTiles } from "./tiles.js";
@@ -923,6 +923,10 @@ async function main() {
         greeting = nextGreeting();
         showHer();
         ears.prime();
+        // The model's cache goes cold five minutes after its last turn, and
+        // the first answer of every conversation was paying for it. Warmed
+        // now, while he is still talking and whisper is still reading.
+        if (core.warm()) console.log(`  [90m(warming her up)[0m`);
         void mouth.render("Mm.").catch(() => null);
         // So that whatever she says next — the filler, the answer — starts
         // on a player that is already up.
@@ -936,7 +940,7 @@ async function main() {
 
       onCommand: (text, woke) => {
         const how = woke.followUp ? "follow-up" : woke.word;
-        const intent = TV_SHORTCUTS && !woke.leaving ? tvIntent(text) : null;
+        const intent = TV_SHORTCUTS ? shortcutFor(text, woke) : null;
         if (intent) {
           void onTheTv(text, woke, how, intent);
           return;

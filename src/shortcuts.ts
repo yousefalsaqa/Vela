@@ -93,6 +93,21 @@ export function tvIntent(text: string): TvIntent | null {
   return null;
 }
 
+/**
+ * The TV command to do directly for this turn, or null to give it to the model.
+ *
+ * Only when it was said with her name. A follow-up (the seconds after she
+ * answers, when she listens without it) can be him talking to someone else in
+ * the room, and "pause" said to a friend should not stop the TV, silently and
+ * at once. He asked for this. A follow-up goes to the model, which is slower
+ * but can tell who he was talking to. A sentence that ends with him leaving
+ * goes there too, so the goodbye is answered.
+ */
+export function shortcutFor(text: string, how: { followUp: boolean; leaving: boolean }): TvIntent | null {
+  if (how.followUp || how.leaving) return null;
+  return tvIntent(text);
+}
+
 /** Whether this intent is a bare transport word that could be about the laptop as easily as the TV. */
 export function couldBeLaptop(text: string, intent: TvIntent): boolean {
   if (intent.kind !== "remote") return false;

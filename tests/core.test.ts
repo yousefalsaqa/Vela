@@ -10,6 +10,8 @@ import {
   UNFINISHED,
   type CoreEvent,
   type Session,
+  WARM_UP,
+  WARM_AFTER_MS,
 } from "../src/core.js";
 import { createStore, type Store } from "../src/memory.js";
 import { present, clear as clearScreen } from "../src/screen.js";
@@ -528,6 +530,98 @@ describe("createCore", () => {
       script.emit(text("x"));
       await until(() => events.length > 0, "the remaining subscriber");
       assert.deepEqual(second, []);
+      core.stop();
+    });
+  });
+
+  describe("warming her up when she hears her name", () => {
+    /** A clock the test moves, so "idle for six minutes" takes no time. */
+    const clock = () => {
+      let t = 1_000_000;
+      return { now: () => t, pass: (ms: number) => (t += ms) };
+    };
+
+    test("after a long idle a silent turn goes, and not a word of it reaches anyone", async () => {
+      const c = clock();
+      const core = build({ now: c.now });
+      assert.equal(core.warm(), true);
+      await until(() => script.sent.length === 1, "the warm-up to reach the session");
+      assert.deepEqual(script.sent, [WARM_UP]);
+      script.emit(text("ok"));
+      script.emit(result());
+      await until(() => !core.isBusy(), "the warm-up to finish");
+      assert.deepEqual(events, [], "a warm-up the hub showed or she said would be a word nobody asked for");
+      core.stop();
+    });
+
+    test("with the model asked inside the last four minutes, the cache is still warm and nothing is sent", async () => {
+      // A warm-up costs a model call against his usage; one that warms what
+      // is already warm is that cost for nothing.
+      const c = clock();
+      const core = build({ now: c.now });
+      core.send("how are you");
+      script.emit(result());
+      await until(() => !core.isBusy(), "the turn to finish");
+      c.pass(WARM_AFTER_MS - 1);
+      assert.equal(core.warm(), false);
+      c.pass(1);
+      assert.equal(core.warm(), true);
+      core.stop();
+    });
+
+    test("never on top of a turn already running, which has the cache warm anyway", async () => {
+      // Running longer than the idle limit, as a long tool job does, so it is
+      // the turn in flight that refuses this and not the idle clock.
+      const c = clock();
+      const core = build({ now: c.now });
+      core.send("build the fantasy project");
+      c.pass(WARM_AFTER_MS + 1);
+      assert.equal(core.warm(), false);
+      core.stop();
+    });
+
+    test("his turn, sent while the warm-up is still out, is answered after it and in full", async () => {
+      // The usual case: she hears her name, warms, and his question arrives
+      // before the warm-up has come back.
+      const core = build({ now: clock().now });
+      core.warm();
+      core.send("what's the time");
+      await until(() => script.sent.length === 2, "both turns in the session");
+      assert.deepEqual(script.sent, [WARM_UP, "what's the time"], "his turn behind the warm-up, not lost or merged");
+      script.emit(text("ok"));
+      script.emit(result());
+      script.emit(text("Half four."));
+      // His first words arriving means the warm-up's end has been read, since
+      // the session answers in order; and his own end hasn't been yet.
+      await until(() => events.length === 1, "his first words");
+      assert.equal(core.isBusy(), true, "still busy: his turn is the one in flight now");
+      script.emit(result(900));
+      await until(() => events.length === 2, "his answer");
+      assert.deepEqual(events, [{ type: "delta", text: "Half four." }, { type: "result", ms: 900 }]);
+      assert.equal(core.isBusy(), false);
+      core.stop();
+    });
+
+    test("his spoken turn stays behind the warm-up when both have to wait for the model switch", async () => {
+      script.session.setModel = () => Promise.resolve();
+      const core = build({ model: "opus", talkModel: "sonnet", now: clock().now });
+      core.warm();
+      core.send("what's the time", { spoken: true });
+      await until(() => script.sent.length === 2, "both turns");
+      assert.deepEqual(script.sent, [WARM_UP, "what's the time"], "out of order, his answer is the one swallowed");
+      core.stop();
+    });
+
+    test("it warms the talking model's cache, the one his spoken turn will use", async () => {
+      const asked: (string | undefined)[] = [];
+      script.session.setModel = (model?: string) => {
+        asked.push(model);
+        return Promise.resolve();
+      };
+      const core = build({ model: "opus", talkModel: "sonnet", now: clock().now });
+      core.warm();
+      await until(() => script.sent.length === 1, "the warm-up");
+      assert.deepEqual(asked, ["sonnet"]);
       core.stop();
     });
   });

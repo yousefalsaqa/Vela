@@ -84,7 +84,28 @@ export interface CoreOptions {
    * said here and not as an error event: an error ends a spoken turn.
    */
   onProblem?: (why: string) => void;
+  /** How long idle before warm() bothers. See WARM_AFTER_MS. */
+  warmAfterMs?: number;
+  now?: () => number;
 }
+
+/**
+ * Idle this long and the model's cache has probably gone.
+ *
+ * Anthropic keeps a prompt's cache for five minutes. Every turn sends about
+ * 30,000 tokens, nearly all of it the same, and measured on 2026-10-02 a turn
+ * after six idle minutes rewrote 4,836 of them where one after thirty seconds
+ * rewrote 72, and the first word came 0.7 to 1.2s later for it. That was the
+ * first answer of every conversation. Four minutes leaves room for the warm-up
+ * itself to land inside the five.
+ */
+export const WARM_AFTER_MS = 240_000;
+
+/**
+ * The silent turn. It is real history, so it says what it is, and asks for
+ * the least the model can answer with; the answer goes nowhere.
+ */
+export const WARM_UP = "[He just said your name, and what he wants is in the next message. Reply with only: ok]";
 
 export interface Core {
   /**
@@ -96,6 +117,12 @@ export interface Core {
   subscribe: (listener: Listener) => () => void;
   /** True while a turn is in flight — the heartbeat waits for this. */
   isBusy: () => boolean;
+  /**
+   * He has just said her name, so a turn is seconds away: if the model has
+   * been idle long enough for its cache to have gone cold, send a silent turn
+   * now so his lands on a warm one. Nothing of it is emitted. True if sent.
+   */
+  warm: () => boolean;
   stop: () => void;
 }
 
@@ -233,6 +260,13 @@ export function createCore(opts: CoreOptions): Core {
   let saidThisTurn = "";
   let toolsThisTurn = 0;
   let pushedThisTurn = false;
+  /** Silent turns still in flight, whose output goes nowhere. See warm(). */
+  let silent = 0;
+  /** A real turn was sent while a warm-up was in flight, so she is busy after it. */
+  let queuedBehindWarm = false;
+  const now = opts.now ?? Date.now;
+  /** When the model was last asked anything; never, to start with. */
+  let lastAsked = -Infinity;
 
   /**
    * How long to wait before standing a dead session back up, growing with each
@@ -271,6 +305,19 @@ export function createCore(opts: CoreOptions): Core {
         for await (const msg of session) {
           if (stopped) break;
 
+          const m = msg as { type?: string; duration_ms?: number; result?: string };
+          // A warm-up's answer: swallowed whole, including its end. Turns
+          // are answered in order, so the first result is the warm-up's.
+          if (silent > 0) {
+            if (m.type === "result") {
+              silent--;
+              busy = silent > 0 || queuedBehindWarm;
+              queuedBehindWarm = false;
+              deaths = 0;
+            }
+            continue;
+          }
+
           const lines = toolActivity(msg);
           if (lines.length) {
             toolsThisTurn += lines.length;
@@ -284,7 +331,6 @@ export function createCore(opts: CoreOptions): Core {
             emit({ type: "delta", text: delta });
           }
 
-          const m = msg as { type?: string; duration_ms?: number; result?: string };
           if (m.type === "result") {
             busy = false;
             deaths = 0; // a turn came back, so whatever was wrong has passed
@@ -316,6 +362,8 @@ export function createCore(opts: CoreOptions): Core {
       // The stream is gone and she is meant to be here. Surface it, reset the
       // turn that fell in the hole, and rebuild.
       busy = false;
+      silent = 0;
+      queuedBehindWarm = false;
       streamedThisTurn = false;
       saidThisTurn = "";
       toolsThisTurn = 0;
@@ -371,6 +419,8 @@ export function createCore(opts: CoreOptions): Core {
   return {
     send(text: string, how: { spoken?: boolean } = {}) {
       if (stopped) return;
+      lastAsked = now();
+      if (silent > 0) queuedBehindWarm = true;
       busy = true;
       streamedThisTurn = false;
       saidThisTurn = "";
@@ -394,6 +444,25 @@ export function createCore(opts: CoreOptions): Core {
     },
 
     isBusy: () => busy,
+
+    warm() {
+      if (stopped || busy || now() - lastAsked < (opts.warmAfterMs ?? WARM_AFTER_MS)) return false;
+      lastAsked = now();
+      silent++;
+      busy = true;
+      // Queued exactly the way send() queues his turn, so it is always ahead
+      // of it: turns are answered in order, and a warm-up behind his turn
+      // would have its "ok" spoken and his answer swallowed.
+      if (opts.talkModel === undefined) {
+        turns.send(WARM_UP);
+        return true;
+      }
+      // On the model his turn will be on, or it warms the wrong cache.
+      void useModel(opts.talkModel).then(() => {
+        if (!stopped) turns.send(WARM_UP);
+      });
+      return true;
+    },
 
     stop() {
       stopped = true;
