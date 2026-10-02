@@ -13,6 +13,44 @@
  * and it is said at once, because a tool call is seconds of silence that has
  * already begun.
  */
+/**
+ * Whether what he asked is something to do or something to find out.
+ *
+ * "Let me see" before turning on Netflix sounds like she isn't sure she can,
+ * and he noticed. A filler should say what she is doing: an instruction gets
+ * "On it", a question gets "Let me see". Read off the first word that isn't
+ * politeness, which in English is the verb of a request.
+ */
+export type FillerKind = "doing" | "finding";
+
+const POLITE = /^(?:(?:hey|vela|okay|ok|so|um+|uh+|and|also|just|please|now|right|can you|could you|would you|will you|i want you to|i need you to|go ahead and)\s+)+/;
+
+/** Verbs that ask her to do something, rather than to tell him something. */
+export const DOING = new Set([
+  "turn", "switch", "open", "close", "put", "play", "pause", "resume", "start", "stop", "set",
+  "change", "make", "send", "add", "remind", "remember", "save", "note", "write", "create", "delete",
+  "remove", "move", "book", "order", "call", "text", "email", "schedule", "launch", "run", "mute",
+  "unmute", "raise", "lower", "increase", "decrease", "skip", "go", "take", "clear", "cancel",
+  "install", "update", "forget", "watch",
+]);
+
+export function fillerKind(asked: string): FillerKind {
+  const t = asked.toLowerCase().replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
+  if (DOING.has(t.replace(POLITE, "").split(" ")[0] ?? "")) return "doing";
+  // Whisper garbles the front of a sentence often enough that the request is
+  // somewhere inside it: "what question can you also can you turn on Netflix".
+  // Word by word, because a match would swallow the "can" of the second "can
+  // you" in that.
+  const words = t.split(" ");
+  for (let i = 0; i + 2 < words.length; i++) {
+    if (!["can", "could", "would", "will"].includes(words[i]) || words[i + 1] !== "you") continue;
+    let j = i + 2;
+    while (["also", "just", "please"].includes(words[j])) j++;
+    if (DOING.has(words[j] ?? "")) return "doing";
+  }
+  return "finding";
+}
+
 export interface Filler {
   /**
    * A question is on its way to her. `since` is when the gate closed on it,

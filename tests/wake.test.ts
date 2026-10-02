@@ -12,6 +12,7 @@ import {
   type TurnNote,
 } from "../src/wake.js";
 import { SAMPLE_RATE, levelDb } from "../src/listen.js";
+import type { Identity } from "../src/voices.js";
 import { fakeSpawner, settle } from "./helpers/proc.js";
 
 /**
@@ -605,6 +606,8 @@ describe("startWakeListener", () => {
     turn?: { judge: (pcm: Buffer) => Promise<number | null>; act?: boolean };
     /** Every chunk off the microphone, held or not. */
     onRaw?: (pcm: Buffer) => void;
+    /** Whose voice each utterance is. */
+    who?: (pcm: Buffer) => Promise<Identity | null>;
   } = {}) {
     const fake = fakeSpawner();
     const commands: string[] = [];
@@ -631,6 +634,7 @@ describe("startWakeListener", () => {
       ...(opts.followUps === undefined ? {} : { followUps: opts.followUps }),
       ...(opts.now ? { now: opts.now } : {}),
       ...(opts.onRaw ? { onRaw: opts.onRaw } : {}),
+      ...(opts.who ? { who: opts.who } : {}),
       ...(opts.turn
         ? { turn: { judge: opts.turn.judge, threshold: 0.5, act: opts.turn.act ?? false, onNote: (n: TurnNote) => notes.push(n) } }
         : {}),
@@ -1007,6 +1011,51 @@ describe("startWakeListener", () => {
       2,
       "a window a nameless sentence can renew turns one mis-fire into the whole conversation",
     );
+    wake.stop();
+  });
+
+  test("a conversation with someone she knows doesn't run out at the cap the way the room does", async () => {
+    // Seven turns into asking her about dinner, without her name, she stopped
+    // hearing him. The cap is for noise and strangers; his own voice isn't either.
+    let clock = 1_000;
+    const yousef: Identity = { kind: "known", name: "Yousef", score: 0.75, speech: 2 };
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Vela, what's for dinner", "something with soup", "ramen maybe", "or pho"],
+      followUpMs: 5_000,
+      followUps: 1,
+      now: () => clock,
+      who: async () => yousef,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    for (let i = 0; i < 3; i++) {
+      clock += 4_000;
+      await utterance();
+      await until(() => commands.length === i + 2, `follow-up ${i + 1}`);
+    }
+    assert.deepEqual(commands, ["what's for dinner", "something with soup", "ramen maybe", "or pho"]);
+    wake.stop();
+  });
+
+  test("a voice that only leans towards him still spends the window, as noise would", async () => {
+    let clock = 1_000;
+    const leaning: Identity = { kind: "unsure", score: 0.3, speech: 2, nearest: "Yousef" };
+    const { wake, commands, utterance } = listener({
+      transcripts: ["Vela, what's for dinner", "something with soup", "ramen maybe"],
+      followUpMs: 5_000,
+      followUps: 1,
+      now: () => clock,
+      who: async () => leaning,
+    });
+    await utterance();
+    await until(() => commands.length === 1, "the address");
+    clock += 4_000;
+    await utterance();
+    await until(() => commands.length === 2, "the one follow-up the cap allows");
+    clock += 4_000;
+    await utterance();
+    await settle();
+    assert.equal(commands.length, 2, "the TV is 'unsure' too; leaning his way can't be what keeps her listening");
     wake.stop();
   });
 

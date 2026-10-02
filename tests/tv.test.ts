@@ -1042,6 +1042,7 @@ describe("what the shortcuts take as done", () => {
       [{ kind: "power", on: false }, await fake.tv.power(false)],
       [{ kind: "power", on: false }, await fake.tv.power(false)],
       [{ kind: "power", on: true }, await fake.tv.power(true)],
+      [{ kind: "open", app: "netflix" }, await fake.tv.open("netflix")],
     ];
     const netflix = measuredNetflix(1369000);
     done.push([{ kind: "resume" }, await netflix.tv.netflix()]);

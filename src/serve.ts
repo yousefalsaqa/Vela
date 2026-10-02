@@ -1,7 +1,7 @@
 import { buildContextBlock, close, listVoices, saveVoice, forgetVoice } from "./memory.js";
 import { createVoices, openVoiceprinter, useVoices, voiceTag, describe, type Identity, type Voices } from "./voices.js";
 import { createCore } from "./core.js";
-import { serve, readEndpoint, hubUrl, CUT_OFF, CARRIED_ON, type RoomControls } from "./server.js";
+import { serve, readEndpoint, hubUrl, TALKED_OVER, CARRIED_ON, type RoomControls } from "./server.js";
 import { createCanceller, type Canceller } from "./echo.js";
 import { createBargeWatcher, type BargeWatcher, type ArmedStretch } from "./barge.js";
 import { reachable } from "./client.js";
@@ -70,6 +70,7 @@ import {
   WAKE_LEAD_REQUIRED,
   WAKE_ACKS,
   WAKE_FILLERS,
+  WAKE_FILLERS_DOING,
   oneOf,
   WAKE_DEBUG,
   WAKE_MARGIN_DB,
@@ -122,7 +123,7 @@ import {
   VOICEPRINT_WORKER,
 } from "./config.js";
 import { createClips, type Clips } from "./clips.js";
-import { createFiller } from "./filler.js";
+import { createFiller, fillerKind } from "./filler.js";
 import { openWindow, type DeskWindow } from "./window.js";
 
 /**
@@ -673,17 +674,22 @@ async function main() {
      * say, and never the same one twice.
      */
     let lastFill = "";
+    /** What he asked this turn, so the filler fits it. */
+    let asking = "";
     const filler = createFiller({
       afterMs: WAKE_FILL_AFTER_MS,
       say: () => {
-        if (!speakingAloud || !WAKE_FILLERS.length) return;
-        const line = oneOf(WAKE_FILLERS, lastFill);
+        // Fitted to what he asked: "On it" for something to do, "Let me see"
+        // for something to find out.
+        const lines = fillerKind(asking) === "doing" && WAKE_FILLERS_DOING.length ? WAKE_FILLERS_DOING : WAKE_FILLERS;
+        if (!speakingAloud || !lines.length) return;
+        const line = oneOf(lines, lastFill);
         lastFill = line;
         voice.say(line);
       },
     });
     /** What a filler looks like by the time it reaches the speaker. */
-    const fillerWords = new Set(WAKE_FILLERS.map((l) => speakable(l, PRONOUNCE_PHONEMES)));
+    const fillerWords = new Set([...WAKE_FILLERS, ...WAKE_FILLERS_DOING].map((l) => speakable(l, PRONOUNCE_PHONEMES)));
 
     /** "1:29 pm, Wednesday 30 September", the way he would say it. */
     const timeNow = () => {
@@ -829,7 +835,7 @@ async function main() {
       // is the whole of the evidence that she is.
       const spoke = repliedThisTurn;
       console.log(`  \x1b[90m(he talked over her${spoke ? "" : " before she answered"} · ${loudness.toFixed(0)} dBFS)\x1b[0m`);
-      overHer = spoke ? CUT_OFF : CARRIED_ON;
+      overHer = spoke ? TALKED_OVER : CARRIED_ON;
       cutTurn = true;
       voice.stop();
       speaker.cut?.();
@@ -862,7 +868,7 @@ async function main() {
         : "nothing heard";
       if (!stretch.stopped) {
         console.log(
-          `  [90m(listened over her ${secs(stretch.ms)}: ${loud}, ${(stretch.himMs / 1000).toFixed(1)}s like him, not stopped)[0m`,
+          `  \x1b[90m(listened over her ${secs(stretch.ms)}: ${loud}, ${(stretch.himMs / 1000).toFixed(1)}s like him, not stopped)\x1b[0m`,
         );
       }
       try {
@@ -895,6 +901,7 @@ async function main() {
 
     const toModel = (text: string, woke: WakeTrigger, how: string) => {
       repliedThisTurn = false;
+      asking = text;
       listener.hold();
       if (hearing) barge?.arm();
       answering = true;
@@ -968,7 +975,9 @@ async function main() {
           ? tv().volume(intent)
           : intent.kind === "power"
             ? tv().power(intent.on)
-            : tv().netflix());
+            : intent.kind === "open"
+              ? tv().open(intent.app)
+              : tv().netflix());
       console.log(`  \x1b[90m(tv, directly: ${said} ${secs(Date.now() - started)})\x1b[0m`);
       if (worked(intent, said)) {
         didDirectly.push(didLine(intent));
@@ -1032,7 +1041,7 @@ async function main() {
         // The model's cache goes cold five minutes after its last turn, and
         // the first answer of every conversation was paying for it. Warmed
         // now, while he is still talking and whisper is still reading.
-        if (core.warm()) console.log(`  [90m(warming her up)[0m`);
+        if (core.warm()) console.log(`  \x1b[90m(warming her up)\x1b[0m`);
         void mouth.render("Mm.").catch(() => null);
         // So that whatever she says next — the filler, the answer — starts
         // on a player that is already up.
@@ -1148,7 +1157,7 @@ async function main() {
     // fillers need holding in memory: they go into the same player as the
     // reply, so that the two never overlap.
     void speaker.prime?.(
-      [...new Set([...WAKE_FILLERS, ...(clips ? [] : [...WAKE_ACKS, ...WAKE_BYES])])].map((l) =>
+      [...new Set([...WAKE_FILLERS, ...WAKE_FILLERS_DOING, ...(clips ? [] : [...WAKE_ACKS, ...WAKE_BYES])])].map((l) =>
         speakable(l, PRONOUNCE_PHONEMES),
       ),
     );

@@ -20,7 +20,9 @@ export type TvIntent =
   | { kind: "volume"; by?: number; to?: number; mute?: boolean }
   | { kind: "power"; on: boolean }
   /** "Resume my show": Netflix's last Continue Watching, by its link. */
-  | { kind: "resume" };
+  | { kind: "resume" }
+  /** "Turn on Netflix": open an app on the TV, nothing more. */
+  | { kind: "open"; app: string };
 
 /** A step for "louder", the same sizes the tool tells the model to use. */
 export const STEP = { little: 3, plain: 5, lot: 10 } as const;
@@ -43,7 +45,14 @@ export function bare(text: string): string {
 const THING = "(?:it|that|this|the tv|tv|the telly|netflix|the show|the episode|the movie|the film)";
 const TV = "(?:the tv|tv|the telly|the television)";
 
+/** His apps, as he says them. Opening one is only ever about the TV: it is where he watches them. */
+const APP = "(netflix|youtube|disney plus|disney|crave|spotify|twitch|prime video|prime)";
+
 const RULES: { pattern: RegExp; intent: (m: RegExpMatchArray) => TvIntent }[] = [
+  {
+    pattern: new RegExp(`^(?:(?:turn on|put on|open|start|launch|bring up|go to) ${APP}|put ${APP} on)(?: on ${TV})?$`),
+    intent: (m) => ({ kind: "open", app: m[1] ?? m[2] }),
+  },
   { pattern: new RegExp(`^pause(?: ${THING})?$`), intent: () => ({ kind: "remote", button: "pause" }) },
   // "Stop" alone could be him telling her to stop talking; with the show named it can't.
   { pattern: /^stop (?:the show|netflix|the episode|the movie|the film|the tv)$/, intent: () => ({ kind: "remote", button: "pause" }) },
@@ -131,6 +140,8 @@ export function worked(intent: TvIntent, said: string): boolean {
       return intent.on ? said === "The TV is on." : /^The TV is (?:off\.|already off)/.test(said);
     case "resume":
       return said.startsWith("Playing ");
+    case "open":
+      return said.endsWith(" is open on the TV.");
   }
 }
 
@@ -143,6 +154,8 @@ export function didLine(intent: TvIntent): string {
       return `turned the TV ${intent.on ? "on" : "off"}`;
     case "resume":
       return "resumed his show on Netflix";
+    case "open":
+      return `opened ${intent.app} on the TV`;
     case "volume":
       if (intent.mute !== undefined) return intent.mute ? "muted the TV" : "unmuted the TV";
       return intent.to !== undefined ? `set the TV volume to ${intent.to}` : `turned the TV ${intent.by! > 0 ? "up" : "down"}`;

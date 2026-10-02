@@ -741,9 +741,9 @@ export const WAKE_FOLLOWUP_MS = Number(process.env.VELA_WAKE_FOLLOWUP ?? "30000"
  * then the room keeps the session alive as long as anyone in it is talking.
  *
  * This was Infinity, and it went exactly that way: one hallucinated name, and
- * every noise in the room for the next several minutes arrived as a turn. Six
- * is a compromise rather than a fix, because only her name re-arms the count,
- * so it bounds a real conversation he never names her in by the same amount.
+ * every noise in the room for the next several minutes arrived as a turn. A
+ * turn in a voice she knows doesn't count against it, so it bounds the room
+ * and strangers, not a conversation with him; see arm in wake.ts.
  * The gate that actually belongs in front of this is confidence — see
  * VELA_SILENCE — and this is the backstop for when that lets one through.
  */
@@ -979,6 +979,14 @@ export const WAKE_FILLERS =
   (process.env.VELA_WAKE_FILLER ?? "").trim().toLowerCase() === "off"
     ? []
     : linesFrom(process.env.VELA_WAKE_FILLER, ["One sec.", "Let me see.", "Let me check.", "Hang on."]);
+/**
+ * The filler for an instruction rather than a question: "turn on Netflix" is
+ * not something to look into. See fillerKind in filler.ts.
+ */
+export const WAKE_FILLERS_DOING =
+  (process.env.VELA_WAKE_FILLER ?? "").trim().toLowerCase() === "off"
+    ? []
+    : linesFrom(process.env.VELA_WAKE_FILLER_DOING, ["On it.", "Sure, one sec."]);
 
 /**
  * How long after the gate closes on his question before silence needs a

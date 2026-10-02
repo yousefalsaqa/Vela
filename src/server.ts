@@ -230,6 +230,18 @@ export const CUT_OFF =
  * He talked before she had said anything: not cutting her off, still asking.
  * The turn she was about to answer was stopped, so this is the rest of it.
  */
+/**
+ * He talked over her reply out loud. Not the button: pressed, it means he has
+ * heard enough, and CUT_OFF says so. Spoken, it is as often "wait, also turn
+ * on Netflix, then come back to this", and being told he'd heard enough, she
+ * answered in one sentence and never came back. So this says only what
+ * happened, and that coming back is allowed.
+ */
+export const TALKED_OVER =
+  "[He talked over your last reply, so it stopped where he started and he " +
+  "may not have heard the rest. Answer what he says now. If he asks you to " +
+  "do something and then come back to what you were saying, do come back to it.]";
+
 export const CARRIED_ON =
   "[He carried on before you had answered, and that turn was stopped. Take " +
   "this together with what he said just before, and answer both as one.]";

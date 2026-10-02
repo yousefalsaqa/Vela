@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
-import { createFiller } from "../src/filler.js";
+import { createFiller, fillerKind } from "../src/filler.js";
 
 describe("createFiller", () => {
   let said: number;
@@ -86,5 +86,27 @@ describe("createFiller", () => {
     filler.expect(clock);
     mock.timers.tick(1_500);
     assert.equal(said, 2);
+  });
+});
+
+describe("fillerKind", () => {
+  test("an instruction is something to do, so it gets 'On it', not 'Let me see'", () => {
+    // His sentence as whisper wrote it, and the filler that came before it
+    // was "Let me check." The request is inside the garble.
+    assert.equal(fillerKind("What question can you also can you turn on Netflix on the TV?"), "doing");
+    assert.equal(fillerKind("Can you turn on Netflix on the TV?"), "doing");
+    assert.equal(fillerKind("Okay, so could you just remind me at five?"), "doing");
+    assert.equal(fillerKind("Remember that I like ramen."), "doing");
+    assert.equal(fillerKind("Put the volume up."), "doing");
+  });
+
+  test("a question, or something to look into, is something to find out", () => {
+    assert.equal(fillerKind("Can you tell me about the Roman Empire?"), "finding");
+    assert.equal(fillerKind("I'm kinda hungry, what should I get to eat?"), "finding");
+    assert.equal(fillerKind("Find me somewhere to eat."), "finding");
+  });
+
+  test("nothing to go on is a question, the filler that was always used", () => {
+    assert.equal(fillerKind(""), "finding");
   });
 });

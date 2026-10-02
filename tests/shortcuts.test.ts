@@ -47,6 +47,12 @@ describe("tvIntent", () => {
     ["Shut the TV off.", { kind: "power", on: false }],
     ["Put my show on.", { kind: "resume" }],
     ["Put the volume on 15.", { kind: "volume", to: 15 }],
+    // He asked her to "turn on Netflix on the TV" and it went through the
+    // model for 11.9s.
+    ["Turn on Netflix.", { kind: "open", app: "netflix" }],
+    ["Can you turn on Netflix on the TV?", { kind: "open", app: "netflix" }],
+    ["Put Netflix on.", { kind: "open", app: "netflix" }],
+    ["Open YouTube on the TV.", { kind: "open", app: "youtube" }],
   ];
   for (const [said, intent] of cases) {
     test(`"${said}"`, () => assert.deepEqual(tvIntent(said), intent));
@@ -64,6 +70,8 @@ describe("tvIntent", () => {
       "Stop.", // could be her talking
       "Stop it.",
       "Continue.", // could be what she was saying
+      "Open the fantasy project.",
+      "Turn on the lights.",
       "How are you?",
       "",
     ]) {
@@ -119,6 +127,11 @@ describe("worked", () => {
     assert.equal(worked({ kind: "power", on: false }, "The TV is already off."), true);
   });
 
+  test("an app opening is done when the TV says it's in front, not when it was only asked", () => {
+    assert.equal(worked({ kind: "open", app: "netflix" }, "Netflix is open on the TV."), true);
+    assert.equal(worked({ kind: "open", app: "netflix" }, "Asked the TV to open Netflix, but it isn't in front yet."), false);
+  });
+
   test("a resume that played somewhere other than his spot is not quietly accepted", () => {
     assert.equal(worked({ kind: "resume" }, 'Playing The Mentalist, S2 E10 "Throwing Fire" from 22:49.'), true);
     assert.equal(worked({ kind: "resume" }, "Netflix is playing, but at 5:00, not where you left The Mentalist (22:51)."), false);
@@ -133,5 +146,6 @@ describe("didLine", () => {
     assert.equal(didLine({ kind: "volume", mute: true }), "muted the TV");
     assert.equal(didLine({ kind: "power", on: true }), "turned the TV on");
     assert.equal(didLine({ kind: "resume" }), "resumed his show on Netflix");
+    assert.equal(didLine({ kind: "open", app: "netflix" }), "opened netflix on the TV");
   });
 });

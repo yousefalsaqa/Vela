@@ -745,6 +745,9 @@ export interface WakeOptions {
 export const NAME_QUIET_MS = 200;
 export const NAME_WATCH_MS = 200;
 
+/** The longest a turn waits on its voiceprint once whisper has read it. See consider. */
+export const WHO_WAIT_MS = 300;
+
 /** How far back a missed "Hey Vela" can be, and how long one can last. */
 const MISSED_WITHIN_MS = 10_000;
 const MISSED_LONGEST_MS = 3_000;
@@ -901,11 +904,12 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
    * number of nameless turns as well as a stretch of time, and the number is
    * small enough that a mis-fire is an annoyance rather than an open mic.
    *
-   * Be honest about what the cap costs, because it is not free: only saying her
-   * name re-arms the count, so a real conversation he never names her in dies
-   * at the same limit the noise does. Six is chosen for that side of it rather
-   * than this one — long enough to be a conversation, short enough that a room
-   * talking to itself runs out.
+   * Be honest about what the cap costs, because it is not free: a real
+   * conversation he never names her in would die at the same limit the noise
+   * does. It did, on 2026-10-02, seven turns into him asking about dinner. So a
+   * nameless turn in a voice she knows is not counted against it: noise, the
+   * TV and a room talking to itself are not voices she knows, and those still
+   * run out. Six is long enough to be a conversation with anyone else.
    */
   const arm = () => {
     followUntil = now() + followUpMs;
@@ -994,7 +998,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
   /** The same test at the close, before any claim has been made. */
   const moreThanTheName = (span: Span) => span.heard - fireHeard >= hangoverMs;
 
-  const consider = (text: string, heard: Heard) => {
+  const consider = (text: string, heard: Heard, who: Identity | null = null) => {
     const { level, span } = heard;
     // Her name, already answered the moment he stopped. If the gate closed
     // around it before then, it is still on its way through whisper, and it is
@@ -1080,8 +1084,9 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
     if (addressed) arm();
     else {
       // Measured from the last thing said to her, so a conversation stays
-      // open for as long as it is still a conversation.
-      followLeft--;
+      // open for as long as it is still a conversation. Someone she knows
+      // talking to her doesn't spend the window; see arm.
+      if (who?.kind !== "known") followLeft--;
       followUntil = now() + followUpMs;
     }
     // A long sentence that ends with him leaving: answered, then over. Closed
@@ -1110,9 +1115,17 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
         // Held between being captured and being read means she started
         // talking over it, and it is very likely her own voice.
         if (held) continue;
-        const text = await (heard.early ?? opts.hear(heard.pcm)).catch(() => "");
+        // Whose voice it was is worked out beside whisper and is nearly always
+        // in first; never waited on for long, so a slow print can't slow a turn.
+        const [text, who] = await Promise.all([
+          (heard.early ?? opts.hear(heard.pcm)).catch(() => ""),
+          Promise.race([
+            heard.who.catch(() => null),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), WHO_WAIT_MS).unref?.()),
+          ]),
+        ]);
         if (!stopped && !held) {
-          consider(text, heard);
+          consider(text, heard, who);
           note(heard);
         }
       }

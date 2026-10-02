@@ -974,7 +974,8 @@ browser's to say, or it would be said twice.
 | `VELA_WAKE_EARLY` | `300` | Milliseconds of quiet before whisper starts reading, inside the gate's own wait. Used only if nothing loud follows; otherwise thrown away and the whole sentence read. `0` reads only after the gate closes |
 | `VELA_WAKE_ACK` | `Yes?\|I'm here.\|Right here.\|Go on.\|Yeah?\|Still here.\|Listening.` | What she says to her name alone. Several, split on `\|`, never the same twice running |
 | `VELA_WAKE_BYE` | `Okay.\|Alright.\|Sure.\|Right.` | What she says when he tells her they are finished. Same shape |
-| `VELA_WAKE_FILLER` | `One sec.\|Let me see.\|Let me check.\|Hang on.` | What she says when she is slow to start answering. `off` for never |
+| `VELA_WAKE_FILLER` | `One sec.\|Let me see.\|Let me check.\|Hang on.` | What she says when she is slow to start answering a question. `off` for never |
+| `VELA_WAKE_FILLER_DOING` | `On it.\|Sure, one sec.` | The same for an instruction: "Let me see" before turning on Netflix sounded like she wasn't sure she could. Which one is read off the request's verb, inside a garbled front if need be. See `fillerKind` in `src/filler.ts` |
 | `VELA_WAKE_FILLER_AFTER` | `4000` | A safety net: milliseconds after the gate closes before a stalled answer is filled. The real trigger is her going to a tool without a word, which fills at once. See `src/filler.ts` |
 | `VELA_WAKE_DEBUG` | `off` | Print every transcript with its level and whether it woke her |
 | `VELA_SILENCE` | `0.5` | How sure whisper may be that an utterance was silence before it is thrown away. Higher lets more through |
@@ -1036,10 +1037,12 @@ Stopping is the hub's cut (the rest unspoken, the buffer dropped, the
 sentence sounding ended) plus the model's turn interrupted, so his next turn
 isn't queued behind a long reply. What he said from just before he started
 goes into her ears first, so the sentence keeps its opening words, and the
-model is told he cut her off, or, if she hadn't said anything yet, that he
-was still asking. Only the barge watcher
-hears the cleaned stream; the wake word and whisper keep the microphone they
-were tuned on.
+model is told what happened and no more: it stopped where he started, and
+if he asks her to do something and come back, she comes back. The hub's
+button keeps its own note ("he had heard enough, one sentence"), because a
+press means that; a voice over her is as often "wait, also turn on Netflix,
+then carry on", and told he'd heard enough she never carried on. If she
+hadn't said anything yet, he was still asking, and she is told that instead.
 
 ```
 uv venv --python 3.12 ~/.vela-aec
@@ -1190,7 +1193,8 @@ AirPlay's `/info` with, and only sweeps for it when it has to be on.
 took 4.0s before she said anything: the model deciding to use the tool, the
 TV doing it, and the model again to talk about it. And he asked her not to
 narrate it. So [shortcuts.ts](src/shortcuts.ts) recognises a whole, short TV
-command in whisper's text ("pause it", "turn it up a bit", "mute", "turn off
+command in whisper's text ("pause it", "turn it up a bit", "mute", "turn on
+Netflix", "turn off
 the TV", "resume my show"), does it directly, and stays quiet when it worked:
 the TV doing it is the answer. When it didn't, she says why. Only the whole
 utterance counts, politeness aside; "pause it, I want to ask you something"
