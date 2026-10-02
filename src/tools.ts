@@ -20,6 +20,7 @@ import { showPicture } from "./picture.js";
 import { express, FACES, CAPTION_MAX } from "./face.js";
 import { askForWork } from "./work.js";
 import { voices } from "./voices.js";
+import { tv, REMOTE, type Button } from "./tv.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -447,6 +448,77 @@ export const velaToolDefs = [
       { alwaysLoad: true },
     ),
 
+    // The TV. Loaded with the prompt like the map: these are spoken asks from
+    // the couch, and a tool search is a second round trip before anything moves.
+    tool(
+      "tv_power",
+      "Turn the living-room TV on or off. It's a Fire TV you reach over the home " +
+        "network, so this works whatever it's showing, screensaver included.",
+      { on: z.boolean().describe("true to turn it on, false to turn it off.") },
+      async (args) => text(await tv().power(args.on)),
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "tv_volume",
+      "Change the TV's volume, which runs 0 to 100. Give `to` for a level, `by` " +
+        "for a step (+5, -10), or `mute`. 'A bit louder' is about +3, 'louder' +5, " +
+        "'way louder' +10. The answer is the level it reads back afterwards.",
+      {
+        to: z.number().optional().describe("A level, 0-100."),
+        by: z.number().optional().describe("A step up (positive) or down (negative)."),
+        mute: z.boolean().optional().describe("true to mute, false to unmute."),
+      },
+      async (args) => text(await tv().volume({ to: args.to, by: args.by, mute: args.mute })),
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "tv_remote",
+      "Press a button on the TV's remote: play_pause, play, pause, back, home, " +
+        "rewind, fast_forward. There is no up, down or OK, on purpose: you can't " +
+        "see the TV, and a blind press lands on whatever is focused (once it " +
+        "rated a show instead of playing it). Reach things by name with tv_open " +
+        "or tv_netflix instead.",
+      { button: z.enum(Object.keys(REMOTE) as [Button, ...Button[]]) },
+      async (args) => text(await tv().remote(args.button)),
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "tv_open",
+      "Open an app on the TV by name: Netflix, YouTube, Disney+, Crave, Spotify, " +
+        "Twitch, Prime Video. It only opens it: 'open Netflix' means exactly this, " +
+        "and he picks the profile and the show himself. To resume or play a show, " +
+        "use tv_netflix.",
+      { app: z.string().describe("The app's name as he said it: 'netflix', 'youtube'.") },
+      async (args) => text(await tv().open(args.app)),
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "tv_netflix",
+      "Play something on Netflix on the TV. With no id it resumes what he was " +
+        "last watching ('resume my show', 'put my show on') and checks it really " +
+        "resumed where he left off. With an id it plays that title: find the id " +
+        "by searching the web for '<title> netflix'; it is the number in " +
+        "netflix.com/title/<id>. Plays on whichever profile Netflix used last. " +
+        "Takes 15 to 30 seconds, so say a few words first ('putting it on').",
+      { id: z.string().optional().describe("A Netflix title id, digits only. Leave out to resume.") },
+      async (args) => text(await tv().netflix({ id: args.id })),
+      { alwaysLoad: true },
+    ),
+
+    tool(
+      "tv_status",
+      "What the TV is doing: on or off, which app is in front, the volume, " +
+        "whether Netflix is playing and where, and what he was last watching on " +
+        "Netflix. Use it to answer 'what was I watching' or before changing " +
+        "something when you need to know where it stands.",
+      {},
+      async () => text(await tv().status()),
+    ),
+
     tool(
       "browser_history",
       "Search what Yousef has had open in Chrome, Edge or Brave. Use this " +
@@ -559,6 +631,6 @@ export const velaTools = createSdkMcpServer({
   version: "0.1.0",
   instructions:
     "Yousef's personal assistant capabilities: durable memory, a project " +
-    "registry, and control of his Windows desktop.",
+    "registry, control of his Windows desktop, and his TV.",
   tools: velaToolDefs,
 });

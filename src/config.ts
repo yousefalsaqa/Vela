@@ -444,6 +444,19 @@ export const WHISPER_DEVICE = process.env.VELA_WHISPER_DEVICE ?? "cpu";
  * side and the question answers itself.
  */
 export const KEEP_AUDIO = switchedOn(process.env.VELA_KEEP_AUDIO, false);
+/**
+ * The living-room TV: a Fire TV Edition set on the router by Ethernet, driven
+ * over adb's network debugging. The address is where the router put it on
+ * 2026-10-02; the name is what it calls itself over AirPlay, which is how she
+ * finds it again if the router ever moves it. The MAC is its Ethernet port's,
+ * for Wake-on-LAN: after a while off it drops off the network entirely, and
+ * the magic packet is the only thing that brings it back. VELA_ADB when adb
+ * is somewhere the winget lookup in tv.ts doesn't reach.
+ */
+export const TV_HOST = process.env.VELA_TV_HOST ?? "192.168.0.246";
+export const TV_NAME = process.env.VELA_TV_NAME ?? "yousef's Fire TV";
+export const TV_MAC = process.env.VELA_TV_MAC ?? "4C:49:29:B2:23:6D";
+export const ADB = process.env.VELA_ADB;
 
 /**
  * Words whisper has no prior for and so reliably mangles — his projects, the

@@ -1,6 +1,6 @@
 {
   "name": "vela",
-  "version": "3.8.0",
+  "version": "3.9.0",
   "description": "Personal assistant with hands — Claude Agent SDK, durable memory, desktop control",
   "main": "index.js",
   "scripts": {

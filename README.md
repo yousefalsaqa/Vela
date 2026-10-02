@@ -37,6 +37,8 @@ Added here (`src/tools.ts`):
 | `show_screen` / `clear_screen` | Put a page on her own screen in the hub |
 | `watch` / `list_watches` / `resolve_watch` | Keep an eye on something and speak up when it changes |
 | `remember_voice` / `forget_voice` | Save a new person's voiceprint once they say yes; forget one on request |
+| `tv_power` / `tv_volume` / `tv_remote` | The living-room TV: on, off, volume, play/pause and the buttons that can't land on the wrong thing |
+| `tv_open` / `tv_netflix` / `tv_status` | Open an app on the TV, resume his Netflix show, say what the TV is doing |
 
 ## Memory is an Obsidian vault
 
@@ -1049,6 +1051,47 @@ from clean recordings; the log prints every score (`you › (follow-up · Yousef
 | `VELA_VOICEPRINT` | `on` | `off` stops knowing anyone by voice. Off by itself when the model is missing |
 | `VELA_VOICEPRINT_MODEL` | `~\.vela-wake\speaker\nemo_en_titanet_small.onnx` | Any sherpa-onnx speaker model. ERes2Net is as good and slower |
 
+## The TV
+
+[tv.ts](src/tv.ts) drives the living-room TV, a Fire TV Edition set (Fire OS
+8, which is Android 11) on the router by Ethernet. It is adb over the network,
+the way a developer would drive it: Developer Options, ADB Debugging on, and
+this laptop's key approved once on the TV with "Always allow". Nothing to buy,
+no cloud in the middle. adb comes from `winget install Google.PlatformTools`;
+the address, AirPlay name and MAC are in `config.ts` (`VELA_TV_HOST`,
+`VELA_TV_NAME`, `VELA_TV_MAC`).
+
+**She can't see it.** Netflix refuses screenshots and draws its whole
+interface on one canvas the accessibility tree reports as empty. The first
+attempt at choosing a profile by pressing Up and OK blind landed on the show's
+page and rated it. So the model only gets keys whose meaning doesn't depend on
+what's focused (power, volume, play/pause, back, home, rewind, fast forward),
+reaches everything else by name (an app's package, a show's link), and every
+action reads back what the TV reports instead of trusting the press.
+
+**Off has two depths.** Asleep for a while, it still answers adb, and
+KEYCODE_WAKEUP brings it up, screensaver included. Later it drops off the
+network entirely, and adb dialling it waits out Windows' 21 seconds. So a
+one-and-a-half-second probe of the adb port goes first. For an ask that needs
+the TV on (on, open, Netflix), a TV off the network gets a Wake-on-LAN packet,
+which on this set is the power button: back on the network in 0.7s, screen on.
+For anything else, it's off, said straight away, without waking it.
+
+**Netflix.** "Open Netflix" opens it and stops: he picks the profile. "Resume
+my show" uses Continue Watching, which Netflix hands to Fire TV's home screen
+in the log about 15 seconds after every start: titles, ids, saved positions.
+She keeps the latest copy in `data/netflix.json`, because the log turns over
+within minutes of playback. The show's link (`netflix.com/watch/<id>`) skips
+"Who's watching?" and plays on whichever profile was used last; that was
+tested with the profile screen left up. From a fresh start the show's page is
+up by 10 seconds and plays by itself at 25, and OK on that page is Resume, so
+she presses OK once at 12 seconds. The check is the position Netflix reports
+against the saved one, because the page's trailer also reports "playing", from
+zero. If nothing plays by 45 seconds she says so and stops pressing.
+
+If the router ever moves the TV, she finds it again by the name it answers
+AirPlay's `/info` with, and only sweeps for it when it has to be on.
+
 ## Browser history
 
 [history.ts](src/history.ts) reads Chrome, Edge and Brave history — all SQLite,
@@ -1156,6 +1199,7 @@ src/
   repl.ts      Terminal rendering: prompts, interjections, stream deltas
   tools.ts     Exposes the above to the model as MCP tools
   voices.ts    Who is talking: voiceprints, matching, and the rules for saving one
+  tv.ts        The living-room TV over adb: power, volume, apps, Netflix, Wake-on-LAN
 tests/         Unit tests; tests/live/ needs VELA_LIVE=1
 data/
   vela.db      Memory (gitignored)
@@ -1288,3 +1332,4 @@ you add to this list, bump it.
 | 3.2.1 | A keep toggle on the Work panel pins it open between turns, remembered across reloads, for watching a long run from one place. |
 | 3.3.0 | She hears the room. The service holds the microphone open and answers to her name, out loud, with no window open and nothing pressed — an energy gate keeps silence free, and the whisper worker she already had does the recognising rather than a wake model trained for it. |
 | 3.8.0 | She knows who is talking. A new voice is asked who it is and asked before its print is kept; his is refined every time she is sure. Her own resident window instead of a Chrome tab, a live map for places, faces, and greetings rendered once and played instantly. Faster everywhere: talking really runs on Sonnet now (the switch had been silently refused, so every spoken turn was Opus), whisper reads during the gate's wait instead of after it, "one sec" only when she is actually slow, and 2.6GB less memory committed. Pressing her face is "Hey Vela", a goodbye ends a longer sentence too, and a conversation that runs out on him is logged rather than looking like her going deaf. |
+| 3.9.0 | Hands on the TV. On and off (woken over the network when it has gone fully to sleep), volume, the remote's safe buttons, apps by name, and "resume my show" on Netflix, checked against where he left off rather than assumed. Built around her not being able to see it: no blind Up, Down or OK. |

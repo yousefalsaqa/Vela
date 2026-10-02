@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { velaToolDefs } from "../src/tools.js";
 import { useVoices } from "../src/voices.js";
 import { current } from "../src/screen.js";
+import { useTv, type Tv } from "../src/tv.js";
 
 // The tool handlers go through the default store, so point it at a throwaway
 // database and a throwaway vault before any of them run. Without the vault,
@@ -56,6 +57,12 @@ describe("tool surface", () => {
         "resolve_watch",
         "show_picture",
         "show_screen",
+        "tv_netflix",
+        "tv_open",
+        "tv_power",
+        "tv_remote",
+        "tv_status",
+        "tv_volume",
         "watch",
       ],
       "a tool renamed here is a capability the model silently loses",
@@ -73,6 +80,39 @@ describe("tool surface", () => {
 
   test("no duplicate names", () => {
     assert.equal(byName.size, velaToolDefs.length);
+  });
+});
+
+describe("tv tools", () => {
+  after(() => useTv(null));
+
+  test("reach the TV she was handed, with what he asked for intact", async () => {
+    // The tools are thin, so the one thing to get wrong is the hand-off: a
+    // `by` arriving as a `to` would set the volume to -5.
+    const asked: unknown[] = [];
+    const stub = {
+      power: async (on: boolean) => (asked.push(["power", on]), "ok"),
+      volume: async (change: object) => (asked.push(["volume", change]), "ok"),
+      remote: async (button: string) => (asked.push(["remote", button]), "ok"),
+      open: async (app: string) => (asked.push(["open", app]), "ok"),
+      netflix: async (opts: object) => (asked.push(["netflix", opts]), "ok"),
+      status: async () => (asked.push(["status"]), "ok"),
+    };
+    useTv(stub as unknown as Tv);
+    await call("tv_power", { on: false });
+    await call("tv_volume", { by: -5 });
+    await call("tv_remote", { button: "pause" });
+    await call("tv_open", { app: "youtube" });
+    await call("tv_netflix", { id: "70155590" });
+    await call("tv_status");
+    assert.deepEqual(asked, [
+      ["power", false],
+      ["volume", { to: undefined, by: -5, mute: undefined }],
+      ["remote", "pause"],
+      ["open", "youtube"],
+      ["netflix", { id: "70155590" }],
+      ["status"],
+    ]);
   });
 });
 
