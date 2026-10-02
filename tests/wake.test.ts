@@ -9,6 +9,7 @@ import {
   WAKE_WORDS,
   LAPSED_WITHIN_MS,
   endsInGoodbye,
+  type TurnNote,
 } from "../src/wake.js";
 import { SAMPLE_RATE, levelDb } from "../src/listen.js";
 import { fakeSpawner, settle } from "./helpers/proc.js";
@@ -344,6 +345,41 @@ describe("createSegmenter", () => {
     assert.equal(said.length, 1);
   });
 
+  test("finish closes the open utterance now, without waiting out the hangover", () => {
+    const { seg, said } = listening();
+    seg.push(room(1_000));
+    seg.push(voice(800));
+    seg.push(room(200));
+    assert.equal(said.length, 0, "still inside the 700ms hangover");
+    assert.equal(seg.finish(seg.opened(), seg.heard()), true);
+    assert.equal(said.length, 1);
+  });
+
+  test("finish refuses once he has spoken again since the guess, so a guess can't cut him off", () => {
+    const { seg, said } = listening();
+    seg.push(room(1_000));
+    seg.push(voice(800));
+    seg.push(room(200));
+    const guessedAt = seg.heard();
+    seg.push(voice(300));
+    assert.equal(seg.finish(seg.opened(), guessedAt), false);
+    assert.equal(said.length, 0);
+  });
+
+  test("finish refuses a guess about an utterance that is already over", () => {
+    const { seg, said } = listening();
+    seg.push(room(1_000));
+    seg.push(voice(800));
+    seg.push(room(200));
+    const stale = seg.opened();
+    const at = seg.heard();
+    seg.push(room(1_500));
+    seg.push(voice(800));
+    seg.push(room(200));
+    assert.equal(seg.finish(stale, at), false, "the next sentence is not the one guessed about");
+    assert.equal(said.length, 1);
+  });
+
   test("a gap between words does not end the sentence", () => {
     const { seg, said } = listening();
     seg.push(room(1_000));
@@ -565,6 +601,8 @@ describe("startWakeListener", () => {
     reading?: () => void;
     /** Read early on a pause this long. See WAKE_EARLY_MS. Off unless given. */
     pauseMs?: number;
+    /** Guess at each pause whether he has finished. See src/turn.ts. */
+    turn?: { judge: (pcm: Buffer) => Promise<number | null>; act?: boolean };
   } = {}) {
     const fake = fakeSpawner();
     const commands: string[] = [];
@@ -579,6 +617,7 @@ describe("startWakeListener", () => {
     /** Whisper being asked to read, and the gate closing, in the order they happened. */
     const timeline: string[] = [];
     const heard: Buffer[] = [];
+    const notes: TurnNote[] = [];
     const queue = [...(opts.transcripts ?? [])];
     let fired: ((score: number) => void) | null = null;
 
@@ -589,6 +628,9 @@ describe("startWakeListener", () => {
       followUpMs: opts.followUpMs,
       ...(opts.followUps === undefined ? {} : { followUps: opts.followUps }),
       ...(opts.now ? { now: opts.now } : {}),
+      ...(opts.turn
+        ? { turn: { judge: opts.turn.judge, threshold: 0.5, act: opts.turn.act ?? false, onNote: (n: TurnNote) => notes.push(n) } }
+        : {}),
       ...(opts.detector
         ? {
             detector: {
@@ -655,7 +697,7 @@ describe("startWakeListener", () => {
       await play(Buffer.concat([voice(100), room(200)]));
     };
 
-    return { wake, fake, commands, lapses, leaving, names, byes, woken, order, timeline, heard, play, utterance, fire, addressed };
+    return { wake, fake, commands, lapses, leaving, names, byes, woken, order, timeline, heard, notes, play, utterance, fire, addressed };
   }
 
   test("a question said to her is acknowledged as it ends, before whisper has read it", async () => {
@@ -1416,6 +1458,93 @@ describe("startWakeListener", () => {
     await settle();
     await settle();
     assert.equal(fake.spawned.length, 1, "a listener that reopens on its own shutdown never shuts down");
+  });
+
+  describe("knowing when he has finished", () => {
+    /** listener()'s gate waits 30ms and reads early after 10. */
+    const sure = async () => 0.9;
+    const unsure = async () => 0.1;
+
+    test("taking notes: each pause is written down with both clues and what he did, and the gate still decides", async () => {
+      const { wake, commands, notes, play } = listener({ transcripts: ["Vela, how are you?"], pauseMs: 10, turn: { judge: sure } });
+      await play(Buffer.concat([room(200), voice(100), room(10)]));
+      await settle();
+      assert.equal(commands.length, 0, "taking notes must not change when she answers");
+      await play(room(200));
+      await until(() => notes.length === 1, "the note");
+      assert.deepEqual(
+        { ...notes[0], decidedMs: 0 },
+        { atMs: notes[0].atMs, text: "Vela, how are you?", textDone: true, p: 0.9, call: "done", decidedMs: 0, outcome: "stopped", acted: false, toHer: true },
+      );
+      assert.deepEqual(commands, ["how are you?"]);
+      wake.stop();
+    });
+
+    test("a guess he talked on after is written down as him carrying on, which is the cut-off it would have been", async () => {
+      // The whole point of taking notes first: a "done" followed by more of the
+      // sentence is the mistake that acting on it would have made.
+      const { wake, notes, play } = listener({
+        transcripts: ["Vela, what time is it?", "Vela, what time is it in Tokyo?"],
+        pauseMs: 10,
+        turn: { judge: sure },
+      });
+      await play(Buffer.concat([room(200), voice(100), room(10), voice(100), room(200)]));
+      await until(() => notes.length === 2, "both notes");
+      assert.deepEqual(
+        notes.map((n) => [n.call, n.outcome]),
+        [["done", "carried-on"], ["done", "stopped"]],
+      );
+      wake.stop();
+    });
+
+    test("the room's sentences are written down as not to her, so his numbers aren't the TV's", async () => {
+      const { wake, notes, commands, play } = listener({ transcripts: ["and that's the weather."], pauseMs: 10, turn: { judge: sure } });
+      await play(Buffer.concat([room(200), voice(100), room(200)]));
+      await until(() => notes.length === 1, "the note");
+      assert.equal(notes[0].toHer, false);
+      assert.equal(commands.length, 0);
+      wake.stop();
+    });
+
+    test("switched on, a pause that sounds finished both ways is answered without waiting out the gate", async () => {
+      const { wake, commands, notes, play } = listener({ transcripts: ["Vela, how are you?"], pauseMs: 10, turn: { judge: sure, act: true } });
+      await play(Buffer.concat([room(200), voice(100), room(10)]));
+      await until(() => commands.length === 1, "an answer before the gate's own wait is up");
+      assert.deepEqual(commands, ["how are you?"]);
+      await until(() => notes.length === 1, "the note");
+      assert.equal(notes[0].acted, true);
+      wake.stop();
+    });
+
+    test("switched on, either clue saying he isn't finished leaves it to the gate", async () => {
+      // Trailing words on the page, or a trailing sound: both have to agree,
+      // because answering early is only worth it if it never cuts him off.
+      for (const [text, judge] of [
+        ["Vela, can you find me...", sure],
+        ["Vela, how are you?", unsure],
+      ] as const) {
+        const { wake, commands, notes, play } = listener({ transcripts: [text], pauseMs: 10, turn: { judge, act: true } });
+        await play(Buffer.concat([room(200), voice(100), room(10)]));
+        await settle();
+        await settle();
+        assert.equal(commands.length, 0, `answered early on "${text}"`);
+        await play(room(200));
+        await until(() => notes.length === 1, "the note");
+        assert.equal(notes[0].acted, false);
+        wake.stop();
+      }
+    });
+
+    test("a judge that never answers costs nothing: the gate's own wait still closes it", async () => {
+      const { wake, commands, play } = listener({
+        transcripts: ["Vela, how are you?"],
+        pauseMs: 10,
+        turn: { judge: () => new Promise<number | null>(() => {}), act: true },
+      });
+      await play(Buffer.concat([room(200), voice(100), room(200)]));
+      await until(() => commands.length === 1, "the command, on the gate's own time");
+      wake.stop();
+    });
   });
 });
 

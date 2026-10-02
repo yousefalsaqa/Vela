@@ -18,11 +18,12 @@ import {
 } from "./listen.js";
 import { DATA_DIR } from "./paths.js";
 import { kokoroSynth, synthSpeaker, createVoice, speakable, PRONOUNCE_PHONEMES } from "./voice.js";
-import { startWakeListener, type WakeListener } from "./wake.js";
+import { startWakeListener, type WakeListener, type TurnNote } from "./wake.js";
+import { createTurnJudge } from "./turn.js";
 import { openDetector, openSpotter, type WakeDetector } from "./detect.js";
 import { places } from "./places.js";
 import { createTiles } from "./tiles.js";
-import { existsSync, createWriteStream, mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, createWriteStream, mkdirSync, writeFileSync, readdirSync, rmSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { BUILD } from "./version.js";
 import {
@@ -104,6 +105,10 @@ import {
   WINDOW_STORAGE,
   VOICEPRINT_ON,
   WAKE_EARLY_MS,
+  TURN_MODE,
+  TURN_THRESHOLD,
+  TURN_MODEL,
+  TURN_WORKER,
   WAKE_FILL_AFTER_MS,
   VOICEPRINT_MODEL,
   VOICEPRINT_WORKER,
@@ -758,9 +763,43 @@ async function main() {
     const tape = WAKE_TAPE ? createWriteStream(WAKE_TAPE, { flags: "a" }) : null;
     if (tape) console.log(`  \x1b[33mRecording what she hears to ${WAKE_TAPE}\x1b[0m`);
 
+    /**
+     * A guess at every pause about whether he has finished, written down
+     * beside what he did. See src/turn.ts and TURN_MODE. Off rather than
+     * broken without the model: the fixed second is what she had before.
+     */
+    const judge =
+      TURN_MODE !== "off" && existsSync(TURN_MODEL) && existsSync(WHISPER_PYTHON)
+        ? createTurnJudge({
+            python: WHISPER_PYTHON,
+            worker: TURN_WORKER,
+            model: TURN_MODEL,
+            lazy: LAZY_WORKERS,
+            onProblem: (why) => console.log(`  \x1b[33mTurns:\x1b[0m ${why}`),
+          })
+        : null;
+    const turnLog = join(DATA_DIR, "turns.jsonl");
+    const noteTurn = (n: TurnNote) => {
+      try {
+        appendFileSync(turnLog, `${JSON.stringify({ t: new Date().toISOString(), ...n })}\n`);
+      } catch {
+        /* diagnostics must never cost her the turn */
+      }
+      // The room's guesses go to the file only; his are worth a line.
+      if (!n.toHer) return;
+      const p = n.p === null ? "–" : n.p.toFixed(2);
+      console.log(
+        `  \x1b[90m(turn: ${n.call} · text ${n.textDone ? "done" : "open"} · sound ${p}, ${n.decidedMs}ms` +
+          ` → he ${n.outcome === "stopped" ? "stopped" : "carried on"}${n.acted ? ", answered early" : ""})\x1b[0m`,
+      );
+    };
+
     const listener = startWakeListener({
       device,
       detector,
+      ...(judge
+        ? { turn: { judge: judge.judge, threshold: TURN_THRESHOLD, act: TURN_MODE === "on", onNote: noteTurn } }
+        : {}),
       ffmpeg,
       ...(tape ? { onAudio: (pcm: Buffer) => void tape.write(pcm) } : {}),
       words: WAKE_WORDS,
@@ -930,6 +969,7 @@ async function main() {
      */
     ears.warm();
     mouth.warm();
+    judge?.warm();
     // Every canned line, rendered now in the order they are likely to be
     // needed, so none of them waits on Kokoro when he is listening for it.
     //
@@ -1033,7 +1073,17 @@ async function main() {
       const names = voices.names();
       console.log(`  Voices on: ${names.length ? `she knows ${names.join(", ")}` : "she knows nobody by voice yet"}.`);
     }
+    console.log(
+      judge
+        ? TURN_MODE === "on"
+          ? `  Turns: answering as soon as he sounds finished (threshold ${TURN_THRESHOLD}).`
+          : `  Turns: taking notes on when he finishes, in ${turnLog}; the fixed second still decides.`
+        : TURN_MODE === "off"
+          ? `  Turns: the fixed second only.`
+          : `  Turns: the fixed second only, no model at ${TURN_MODEL}.`,
+    );
     stopListening = () => {
+      judge?.stop();
       known?.stop();
       detector?.stop();
       listener.stop();

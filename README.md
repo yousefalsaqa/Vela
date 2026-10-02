@@ -1003,6 +1003,44 @@ open, so the service announces the room when it comes up; the page used to
 look once, find no room, and treat the press as its own push-to-talk for the
 rest of the day.
 
+## Knowing when he has finished
+
+The gate decides he is done after a fixed second of quiet. Shorter cut him off
+mid-thought, so the second stays, and it is most of the pause between him
+finishing and her answering: "how are you?" measured 1.0s of waiting, 1.0s of
+the model and 0.2s of Kokoro. A fixed wait is the wrong shape. "How are you?"
+is over when it ends; "can you find me, um..." isn't, however long he stops.
+
+[turn.ts](src/turn.ts) takes a guess at every pause, 300ms in, from two clues
+that are already to hand there:
+
+- **The words.** Whisper reads what was said so far at that moment anyway (the
+  early read). A sentence it closed with `.` `?` or `!` is a finished one,
+  unless it is an ellipsis (whisper hearing him trail off) or the last word is
+  one no sentence ends on ("and.", "the.", "um.").
+- **The sound.** Smart Turn v3.2 ([pipecat-ai/smart-turn](https://github.com/pipecat-ai/smart-turn),
+  BSD-2): a Whisper-tiny encoder with one linear layer, trained to hear a
+  falling finish against a trailing "um". 8.7MB, about 30ms on one CPU thread.
+  It runs in [turn_worker.py](scripts/turn_worker.py) under whisper's Python,
+  which already has onnxruntime and numpy; the spectrogram is computed there
+  directly and matches the reference to within 1e-6.
+
+Both have to say done. It starts out **taking notes** (`VELA_TURN=shadow`, the
+default): the fixed second still decides, and every guess is written to
+`data/turns.jsonl` with what he actually did next. Quiet until the gate closed
+is a man who had stopped; anything loud after the guess is him carrying on,
+and a "done" followed by carrying on is exactly the cut-off acting on it would
+have caused. After a few days of his real speech the threshold
+(`VELA_TURN_AT`, 0.5 for now) is set from those, and `VELA_TURN=on` closes the
+utterance the moment a guess says done. Sentences that weren't said to her
+are written down marked `toHer: false`, so the TV doesn't set his threshold.
+
+The model goes in `~/.vela-turn/` (`VELA_TURN_MODEL` to move it):
+
+```
+curl -L -o ~/.vela-turn/smart-turn-v3.2-cpu.onnx https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx
+```
+
 ## Voices
 
 She knows people by voice. Every utterance the gate cuts is turned into a
@@ -1200,6 +1238,7 @@ src/
   tools.ts     Exposes the above to the model as MCP tools
   voices.ts    Who is talking: voiceprints, matching, and the rules for saving one
   tv.ts        The living-room TV over adb: power, volume, apps, Netflix, Wake-on-LAN
+  turn.ts      Whether he has finished talking: the words so far and how they ended
 tests/         Unit tests; tests/live/ needs VELA_LIVE=1
 data/
   vela.db      Memory (gitignored)

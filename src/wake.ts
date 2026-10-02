@@ -2,6 +2,7 @@ import { levelDb, openMic, SAMPLE_RATE, type Mic } from "./listen.js";
 import type { Spawner } from "./proc.js";
 import type { WakeDetector } from "./detect.js";
 import type { Identity } from "./voices.js";
+import { callTurn, soundsFinished } from "./turn.js";
 
 /**
  * The wake word.
@@ -344,6 +345,13 @@ export interface Segmenter {
    * one is matched to the one that closes, across a reset in between.
    */
   opened: () => number;
+  /**
+   * Close utterance `utterance` now, as though the hangover had run out,
+   * provided it is still the one open and nothing loud has been heard since
+   * `at` on the heard() clock. For when something cleverer than a timer has
+   * decided he is done. True if it closed.
+   */
+  finish: (utterance: number, at: number) => boolean;
 }
 
 /**
@@ -513,6 +521,11 @@ export function createSegmenter(
     },
     speaking: () => speech.length > 0,
     opened: () => opened,
+    finish(utterance, at) {
+      if (!speech.length || opened !== utterance || lastLoud > at) return false;
+      close();
+      return true;
+    },
     heard: () => frames * frameMs,
     floor: () => (Number.isNaN(floor) ? FLOOR_MIN : floor),
     lastLoud: () => lastLoud,
@@ -672,6 +685,19 @@ export interface WakeOptions {
   /** Phrases that end the session outright. See DISMISSALS. */
   dismissals?: string[];
   segment?: SegmentOptions;
+  /**
+   * Guess at every pause whether he has finished. See src/turn.ts.
+   *
+   * `act` false takes notes only: the gate keeps its fixed wait and every
+   * guess goes to `onNote` beside what he actually did. `act` true also closes
+   * the utterance the moment a guess says done.
+   */
+  turn?: {
+    judge: (pcm: Buffer) => Promise<number | null>;
+    threshold: number;
+    act: boolean;
+    onNote: (note: TurnNote) => void;
+  };
   ffmpeg?: string;
   spawn?: Spawner;
   now?: () => number;
@@ -771,6 +797,38 @@ interface Span {
   heard: number;
 }
 
+/**
+ * One guess at whether he had finished, taken at a pause, and what he did.
+ *
+ * The note is the point while the guesses are only being collected: `call`
+ * against `outcome` over a few days of his real speech is what says where the
+ * bar belongs, and whether trusting it would ever have cut him off.
+ */
+export interface TurnNote {
+  /** How much audio the utterance had when the pause came, preroll included. */
+  atMs: number;
+  /** What whisper had read by the pause. */
+  text: string;
+  /** Whether that ends like a finished sentence. See soundsFinished. */
+  textDone: boolean;
+  /** Smart Turn's probability that he was done; null if it didn't answer. */
+  p: number | null;
+  /** Both clues together. */
+  call: "done" | "wait";
+  /** How long after the pause the two clues were both in, in ms. */
+  decidedMs: number;
+  /**
+   * What he did: stayed quiet until the gate closed, or carried on talking.
+   * For a guess that was acted on, the gate closed because of it, so
+   * "stopped" there is the guess and not a fact.
+   */
+  outcome: "stopped" | "carried-on";
+  /** Closed early on the strength of this guess. */
+  acted: boolean;
+  /** Whether the utterance turned out to be said to her. The rest is the room. */
+  toHer: boolean;
+}
+
 /** One thing the gate cut out of the room. */
 interface Heard {
   pcm: Buffer;
@@ -783,6 +841,18 @@ interface Heard {
   who: Promise<Identity | null>;
   /** Whisper's read of it, already started during the pause before the close. */
   early: Promise<string> | null;
+  /** The guesses taken in its pauses, with what he did after each. See TurnNote. */
+  guesses: { guess: Guess; outcome: TurnNote["outcome"] }[];
+}
+
+/** A guess in flight: taken at a pause, decided once both clues are in. */
+interface Guess {
+  utterance: number;
+  /** The pause, on the segmenter's heard() clock. */
+  at: number;
+  atMs: number;
+  acted: boolean;
+  decided: Promise<Pick<TurnNote, "text" | "textDone" | "p" | "call" | "decidedMs">>;
 }
 
 export function startWakeListener(opts: WakeOptions): WakeListener {
@@ -1027,7 +1097,10 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
         // talking over it, and it is very likely her own voice.
         if (held) continue;
         const text = await (heard.early ?? opts.hear(heard.pcm)).catch(() => "");
-        if (!stopped && !held) consider(text, heard);
+        if (!stopped && !held) {
+          consider(text, heard);
+          note(heard);
+        }
       }
     } finally {
       working = false;
@@ -1046,12 +1119,32 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
    * before, so starting early can cost a read but never a word.
    */
   let early: { utterance: number; at: number; text: Promise<string> } | null = null;
+  /** Guesses taken in the open utterance's pauses. */
+  let guesses: Guess[] = [];
+
+  /** Every guess in what was just heard, sent on once it is known whether it was said to her. */
+  const note = (heard: Heard) => {
+    for (const { guess, outcome } of heard.guesses) {
+      void guess.decided.then((d) =>
+        opts.turn?.onNote({ ...d, atMs: guess.atMs, outcome, acted: guess.acted, toHer: heard.used }),
+      );
+    }
+  };
 
   const segmenter = createSegmenter((pcm, level) => {
     // Taken whatever happens next, so an early read can never be handed to a
     // later sentence than the one it was made from.
     const read = early;
     early = null;
+    // What he did after each guess is known now: quiet from the pause to the
+    // close is a man who had stopped, anything loud after it is him carrying on.
+    const taken = guesses
+      .filter((g) => g.utterance === segmenter.opened())
+      .map((guess) => ({
+        guess,
+        outcome: (segmenter.lastLoud() <= guess.at ? "stopped" : "carried-on") as TurnNote["outcome"],
+      }));
+    guesses = [];
     if (stopped || held) return;
     const ms = Math.round((pcm.length / 2 / SAMPLE_RATE) * 1000);
     opts.onCaptured?.({ ms, level });
@@ -1064,7 +1157,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
     // has been heard since it was taken.
     const usable =
       read && read.utterance === segmenter.opened() && segmenter.lastLoud() <= read.at ? read.text : null;
-    pending = { pcm, level, span, ms, used: false, who, early: usable };
+    pending = { pcm, level, span, ms, used: false, who, early: usable, guesses: taken };
     recent.push(pending);
     if (recent.length > 20) recent.shift();
     if (detector && firedIn(span) && moreThanTheName(span)) opts.onAsked?.();
@@ -1072,6 +1165,26 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
   }, opts.segment, (pcm) => {
     if (stopped || held) return;
     early = { utterance: segmenter.opened(), at: segmenter.heard(), text: opts.hear(pcm).catch(() => "") };
+    const turn = opts.turn;
+    if (!turn) return;
+    // Asked on the same audio, at the same moment, as the early read: the
+    // text clue is that read, so this costs one 30ms model call on top.
+    const asked = now();
+    const guess: Guess = {
+      utterance: early.utterance,
+      at: early.at,
+      atMs: Math.round((pcm.length / 2 / SAMPLE_RATE) * 1000),
+      acted: false,
+      decided: Promise.all([early.text, turn.judge(pcm).catch(() => null)]).then(([text, p]) => {
+        const textDone = soundsFinished(text);
+        const call = callTurn(textDone, p, turn.threshold);
+        if (turn.act && call === "done" && !held && !stopped && segmenter.finish(guess.utterance, guess.at)) {
+          guess.acted = true;
+        }
+        return { text, textDone, p, call, decidedMs: now() - asked };
+      }),
+    };
+    guesses.push(guess);
   });
 
   /**

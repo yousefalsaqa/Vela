@@ -483,6 +483,24 @@ export const WHISPER_PYTHON =
   );
 
 /**
+ * Knowing when he has finished, rather than waiting a fixed second. See
+ * src/turn.ts.
+ *   shadow — the default: guess at every pause and write the guess down beside
+ *            what he actually did, in data/turns.jsonl. The fixed second still
+ *            decides. A few days of these is what the threshold is set from.
+ *   on     — also answer the moment both clues say he is done.
+ *   off    — the fixed second, and nothing written down.
+ * The worker runs in whisper's Python, which already has onnxruntime and
+ * numpy; the model is pipecat's Smart Turn v3.2, 8.7MB, from
+ * huggingface.co/pipecat-ai/smart-turn-v3.
+ */
+export const TURN_MODE = (process.env.VELA_TURN ?? "shadow").toLowerCase();
+export const TURN_THRESHOLD = Number(process.env.VELA_TURN_AT ?? "0.5");
+export const TURN_MODEL =
+  process.env.VELA_TURN_MODEL ?? join(process.env.USERPROFILE ?? "", ".vela-turn", "smart-turn-v3.2-cpu.onnx");
+export const TURN_WORKER = resolve(here, "../scripts/turn_worker.py");
+
+/**
  * The wake word: she hears the room and answers to her name.
  *
  * On by default, because a service running from boot with a microphone
