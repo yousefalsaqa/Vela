@@ -538,6 +538,13 @@ export function pcmPlayer(opts: {
    */
   let closing: Promise<void> | null = null;
   /**
+   * The player playing out that tail. drain() let go of it as `proc`, but it
+   * is still the one sounding, and being talked over has to be able to stop
+   * it: most of a reply is played from here, after the model has finished
+   * writing it.
+   */
+  let tail: ChildProcess | null = null;
+  /**
    * Whether anything has been said on the player that is running. Not the
    * same as the player running: an opened one runs before the first sentence,
    * and that sentence still must not get a pause in front of it.
@@ -599,6 +606,7 @@ export function pcmPlayer(opts: {
       // tail instead of talking over it.
       proc = null;
       spoken = false;
+      tail = p;
       const wait = (async () => {
         p.stdin?.end();
         await Promise.race([
@@ -611,6 +619,7 @@ export function pcmPlayer(opts: {
         await wait;
       } finally {
         if (closing === wait) closing = null;
+        if (tail === p) tail = null;
       }
     },
 
@@ -626,19 +635,24 @@ export function pcmPlayer(opts: {
      */
     cut() {
       const p = proc;
+      const t = tail;
       proc = null;
+      tail = null;
       spoken = false;
       // Nothing to queue behind: the tail this would have waited for is the
       // audio being ended. Leaving it set would make the next sentence wait
       // on a drain whose player is already dead.
       closing = null;
       p?.kill();
+      t?.kill();
     },
 
     stop() {
       stopped = true;
       proc?.kill();
+      tail?.kill();
       proc = null;
+      tail = null;
     },
   };
 }

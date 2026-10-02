@@ -480,6 +480,20 @@ describe("pcmPlayer", () => {
     await draining;
   });
 
+  test("cutting kills a player that is playing out its tail, not just one still being written to", () => {
+    // When the model has finished writing, the service drains the player:
+    // its pipe is closed and it plays what it holds, which is most of the
+    // reply. Seen live on 2026-10-02: he talked over her there, cut found no
+    // player to kill because drain had let go of it, and she spoke to the end.
+    // The test above only checked the next sentence got a fresh player.
+    const fake = fakeSpawner();
+    const player = pcmPlayer({ spawn: fake.spawn });
+    player.write(samples);
+    void player.drain(1_000);
+    player.cut();
+    assert.equal(fake.spawned[0].proc.killed, true, "the reply he talked over must stop, not play out");
+  });
+
   test("cutting kills the player, rather than letting the sentence it holds finish", () => {
     // The pipe already holds a whole sentence. Ending it politely would play
     // that sentence out, which from the other side of the desk is not being

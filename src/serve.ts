@@ -916,7 +916,11 @@ async function main() {
       // She has no clock. Asked the time, she ran a PowerShell command for
       // it, which was three of the four seconds that turn took. Handed it
       // with the question, she just answers. Who said it rides along too.
-      void voiceOf(woke.who).then((who) => {
+      void voiceOf(woke.who).then((heardWho) => {
+        // Straight after he talked over her, this is the person she was
+        // talking to. His voice raised over hers scored 0.00-0.30 against his
+        // own print, so "new voice" here would have her asking him who he is.
+        const who = overHer && heardWho?.kind === "new" ? null : heardWho;
         const heard = voices ? ` · ${describe(who)}` : "";
         console.log(`  \x1b[36myou ›\x1b[0m \x1b[90m(${how}${heard})\x1b[0m ${text}`);
         // A stranger who spoke to her is one she may now be asked to save.
