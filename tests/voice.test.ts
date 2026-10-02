@@ -1367,6 +1367,30 @@ describe("synthSpeaker", () => {
     assert.equal(h.fake.spawned.length, 0, "a late render must not open the device after he cut her off");
   });
 
+  test("the sentences still waiting their turn when he cuts her off don't play either", async () => {
+    // The rest of a reply is queued the moment the model finishes writing,
+    // well before she finishes saying it. Seen live on 2026-10-02: he talked
+    // over her, the one sentence inside Kokoro was dropped, and every one
+    // queued behind it played on to the end of the reply.
+    const waiting: (() => void)[] = [];
+    const h = harness(
+      (): Promise<Buffer | null> =>
+        new Promise((resolve) => waiting.push(() => resolve(wavFromPcm(Buffer.from([1, 2, 3, 4]), 24_000)))),
+    );
+    h.speaker.speak("First sentence.");
+    h.speaker.speak("Second sentence.");
+    h.speaker.speak("Third sentence.");
+    await settle();
+    h.speaker.cut!();
+    // Kokoro answers whatever it is asked, as it would.
+    for (let i = 0; i < 5; i++) {
+      waiting.splice(0).forEach((done) => done());
+      await settle();
+    }
+    assert.equal(h.fake.spawned.length, 0, "she must not carry on with the rest of a reply he stopped");
+    assert.deepEqual(h.asked, ["First sentence."], "and what was disowned isn't rendered for nothing");
+  });
+
   test("cutting leaves the speaker usable, so the next turn still has a voice", async () => {
     const h = harness();
     h.speaker.speak("First.");

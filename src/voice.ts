@@ -827,13 +827,17 @@ export function synthSpeaker(opts: {
    */
   const rendered = new Map<string, Buffer>();
 
-  const utter = async (text: string) => {
-    if (stopped) return;
-    // Which turn this sentence belongs to. Rendering takes about half a
-    // second, so a cut almost always lands while something is still inside
-    // Kokoro; without this the sentence he interrupted arrives afterwards and
-    // plays into a room he has just silenced.
-    const mine = epoch;
+  /**
+   * Say one sentence, if the turn it was queued in hasn't been cut.
+   *
+   * `mine` is the epoch when the sentence was handed over, not when its turn
+   * in the queue came. A reply is queued whole the moment the model finishes
+   * writing, long before she finishes saying it, and read at the start of
+   * each utter the epoch had always already moved: so a cut dropped only the
+   * sentence inside Kokoro, and the rest of the reply played on.
+   */
+  const utter = async (text: string, mine: number) => {
+    if (stopped || mine !== epoch) return;
     let pcm = rendered.get(text) ?? null;
     if (!pcm) {
       const wav = await opts.render(text);
@@ -856,7 +860,8 @@ export function synthSpeaker(opts: {
       if (stopped) return;
       // Serialised, because the sentences have to reach the player in the
       // order they were written.
-      queue = queue.then(() => utter(text)).catch(() => {});
+      const mine = epoch;
+      queue = queue.then(() => utter(text, mine)).catch(() => {});
     },
 
     cut() {
