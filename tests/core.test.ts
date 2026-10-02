@@ -534,6 +534,46 @@ describe("createCore", () => {
     });
   });
 
+  describe("him talking over her", () => {
+    test("stops the turn at the model, so his next one isn't waiting behind the rest of it", async () => {
+      let interrupts = 0;
+      script.session.interrupt = async () => {
+        interrupts++;
+      };
+      const core = build();
+      core.send("tell me about the history of Rome");
+      script.emit(text("Rome was founded"));
+      core.interrupt();
+      assert.equal(interrupts, 1);
+      core.stop();
+    });
+
+    test("a reply he cut off on 'let me check' isn't taken for a promise she broke", async () => {
+      // Otherwise the nudge would send her straight back to it, over him.
+      script.session.interrupt = async () => {};
+      const core = build();
+      core.send("what's on tonight");
+      script.emit(text("Let me check the listings."));
+      await until(() => events.length === 1, "her first words");
+      core.interrupt();
+      script.emit(result());
+      await until(() => !core.isBusy(), "the turn to end");
+      assert.deepEqual(script.sent, ["what's on tonight"], "no nudge after a reply he stopped");
+      core.stop();
+    });
+
+    test("with nothing being answered there is nothing to stop", () => {
+      let interrupts = 0;
+      script.session.interrupt = async () => {
+        interrupts++;
+      };
+      const core = build();
+      core.interrupt();
+      assert.equal(interrupts, 0);
+      core.stop();
+    });
+  });
+
   describe("warming her up when she hears her name", () => {
     /** A clock the test moves, so "idle for six minutes" takes no time. */
     const clock = () => {

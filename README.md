@@ -1003,6 +1003,39 @@ open, so the service announces the room when it comes up; the page used to
 look once, find no room, and treat the press as its own push-to-talk for the
 rest of the day.
 
+## Talking over her
+
+She used to shut her ears while she talked, because her voice comes back into
+the laptop's microphone at -34.5 dBFS, as loud as his (-35), and she would
+transcribe herself. Now [echo.ts](src/echo.ts) runs WebRTC's echo canceller
+(AEC3, through LiveKit's Python bindings, Apache-2.0) in
+[aec_worker.py](scripts/aec_worker.py), against what the speakers are playing,
+recorded by WASAPI loopback. That covers everything she plays (Kokoro's
+sentences, the rendered greetings, the chime) without any of it reporting
+itself, and it is captured just before it leaves the machine, so it always
+arrives ahead of its echo. Measured live: her voice down to about -60 dBFS
+while she talks, a brief -46 in the first half-second while it adapts.
+Offline, with her exact samples, it reached -75; a reference 100 to 400ms
+early made no difference.
+
+[barge.ts](src/barge.ts) listens to the cleaned microphone while she talks.
+Speech standing 12dB over the room for 0.3s is checked against the prints she
+knows: someone she knows, or a voice leaning towards one by `VELA_BARGE_AT`
+(0.3; his own half-second clips scored 0.34 to 0.46), stops her. The TV and
+what is left of her lean towards no one. Stopping is the hub's cut (the rest
+unspoken, the buffer dropped, the sentence sounding ended) plus the model's
+turn interrupted, so his next turn isn't queued behind a long reply. What he
+said from just before he started goes into her ears first, so the sentence
+keeps its opening words, and the model is told he cut her off, or, if she
+hadn't said anything yet, that he was still asking. Only the barge watcher
+hears the cleaned stream; the wake word and whisper keep the microphone they
+were tuned on.
+
+```
+uv venv --python 3.12 ~/.vela-aec
+uv pip install --python ~/.vela-aec/Scripts/python.exe livekit numpy soundcard
+```
+
 ## Knowing when he has finished
 
 The gate decides he is done after a fixed second of quiet. Shorter cut him off
@@ -1269,6 +1302,8 @@ src/
   tv.ts        The living-room TV over adb: power, volume, apps, Netflix, Wake-on-LAN
   turn.ts      Whether he has finished talking: the words so far and how they ended
   shortcuts.ts Short TV commands she does without the model
+  echo.ts      The microphone with her own voice cancelled out of it
+  barge.ts     Him talking over her: whose voice, and stopping her
 tests/         Unit tests; tests/live/ needs VELA_LIVE=1
 data/
   vela.db      Memory (gitignored)

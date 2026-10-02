@@ -40,6 +40,8 @@ export interface Session extends AsyncIterable<unknown> {
   close: () => void;
   /** Change the model for the requests that follow. The real SDK session has it. */
   setModel?: (model?: string) => Promise<void>;
+  /** Stop the turn being answered. The real SDK session has it, in streaming mode. */
+  interrupt?: () => Promise<unknown>;
 }
 export type SessionFactory = (turns: AsyncGenerator<UserTurn>) => Session;
 
@@ -123,6 +125,11 @@ export interface Core {
    * now so his lands on a warm one. Nothing of it is emitted. True if sent.
    */
   warm: () => boolean;
+  /**
+   * He talked over her: stop the turn being answered, so the rest of a long
+   * reply isn't written for nobody while his next turn waits behind it.
+   */
+  interrupt: () => void;
   stop: () => void;
 }
 
@@ -260,6 +267,8 @@ export function createCore(opts: CoreOptions): Core {
   let saidThisTurn = "";
   let toolsThisTurn = 0;
   let pushedThisTurn = false;
+  /** The turn in flight was stopped by him, so how it ended is not a promise she broke. */
+  let interrupted = false;
   /** Silent turns still in flight, whose output goes nowhere. See warm(). */
   let silent = 0;
   /** A real turn was sent while a warm-up was in flight, so she is busy after it. */
@@ -343,7 +352,9 @@ export function createCore(opts: CoreOptions): Core {
             const said = streamedThisTurn ? saidThisTurn : m.result ?? "";
             // Once per turn. Handing the note back to a turn that was itself
             // the note would be a loop, and a stubborn one.
-            const owed = !pushedThisTurn && endedOnAPromise(said, toolsThisTurn);
+            // A reply he cut off ends wherever he cut it, "let me check" included.
+            const owed = !pushedThisTurn && !interrupted && endedOnAPromise(said, toolsThisTurn);
+            interrupted = false;
             streamedThisTurn = false;
             saidThisTurn = "";
             toolsThisTurn = 0;
@@ -444,6 +455,12 @@ export function createCore(opts: CoreOptions): Core {
     },
 
     isBusy: () => busy,
+
+    interrupt() {
+      if (stopped || !busy || !session.interrupt) return;
+      interrupted = true;
+      void session.interrupt().catch(() => {});
+    },
 
     warm() {
       if (stopped || busy || now() - lastAsked < (opts.warmAfterMs ?? WARM_AFTER_MS)) return false;

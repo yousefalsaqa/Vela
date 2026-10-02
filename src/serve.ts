@@ -1,7 +1,9 @@
 import { buildContextBlock, close, listVoices, saveVoice, forgetVoice } from "./memory.js";
 import { createVoices, openVoiceprinter, useVoices, voiceTag, describe, type Identity, type Voices } from "./voices.js";
 import { createCore } from "./core.js";
-import { serve, readEndpoint, hubUrl, type RoomControls } from "./server.js";
+import { serve, readEndpoint, hubUrl, CUT_OFF, CARRIED_ON, type RoomControls } from "./server.js";
+import { createCanceller, type Canceller } from "./echo.js";
+import { createBargeWatcher, type BargeWatcher } from "./barge.js";
 import { reachable } from "./client.js";
 import { spawn } from "./proc.js";
 import {
@@ -112,6 +114,10 @@ import {
   TURN_MODEL,
   TURN_WORKER,
   TV_SHORTCUTS,
+  BARGE_ON,
+  BARGE_AT,
+  AEC_PYTHON,
+  AEC_WORKER,
   WAKE_FILL_AFTER_MS,
   VOICEPRINT_MODEL,
   VOICEPRINT_WORKER,
@@ -514,7 +520,10 @@ async function main() {
      * opens, because being cut off once is not a setting.
      */
     let cutTurn = false;
+    /** Watches for him talking over her; set up below, once what it calls exists. */
+    let barge: BargeWatcher | null = null;
     const listenAgain = () => {
+      barge?.disarm();
       if (hearing) listener.resume();
     };
 
@@ -797,8 +806,65 @@ async function main() {
       );
     };
 
+    /** What his next turn says about the one he cut off. See talkedOver. */
+    let overHer: string | null = null;
+
+    /**
+     * He talked over her. The same three things the hub's cut does (stop the
+     * rest being spoken, drop what is buffered, end what is sounding), then
+     * the model's turn is stopped too, so his next one isn't queued behind
+     * the rest of a long reply. What he has said so far goes to her ears
+     * first, so his sentence keeps its opening words, and the window is
+     * opened so it is taken without her name.
+     *
+     * If she hadn't said anything yet he wasn't cutting her off, he was still
+     * asking, and the model is told that instead of that it went on too long.
+     */
+    const talkedOver = (lead: Buffer, who: Identity) => {
+      if (!answering) return;
+      const spoke = Boolean(clock?.thought);
+      console.log(`  \x1b[90m(he talked over her${spoke ? "" : " before she answered"} · ${describe(who)})\x1b[0m`);
+      overHer = spoke ? CUT_OFF : CARRIED_ON;
+      cutTurn = true;
+      voice.stop();
+      speaker.cut?.();
+      filler.reset();
+      core.interrupt();
+      listener.open();
+      listener.resume(lead);
+    };
+
+    /**
+     * Hearing him over her: the microphone with her echo cancelled, watched
+     * while she talks for a voice she knows. Only with voices on, since it is
+     * the voiceprint that tells him from the TV and from what is left of her.
+     * A barge-in clip is about 0.6s of speech, well under the 2s voices.ts
+     * needs before it refines anyone's print, so checking never moves his.
+     */
+    barge =
+      BARGE_ON && voices && existsSync(AEC_PYTHON)
+        ? createBargeWatcher({
+            who: (pcm) => voices.listen(pcm),
+            threshold: BARGE_AT,
+            onBarge: talkedOver,
+            onChecked: (who, stops) => {
+              if (!stops) console.log(`  \x1b[90m(a voice while she talked, not his: ${describe(who)})\x1b[0m`);
+            },
+          })
+        : null;
+    const canceller: Canceller | null = barge
+      ? createCanceller({
+          python: AEC_PYTHON,
+          worker: AEC_WORKER,
+          onClean: (pcm) => barge?.push(pcm),
+          onReady: () => console.log(`  \x1b[90m(echo canceller ready: he can talk over her)\x1b[0m`),
+          onProblem: (why) => console.log(`  \x1b[33mTalking over her:\x1b[0m ${why}`),
+        })
+      : null;
+
     const toModel = (text: string, woke: WakeTrigger, how: string) => {
       listener.hold();
+      if (hearing) barge?.arm();
       answering = true;
       cutTurn = false;
       clock = { cut: lastCut, heard: Date.now() };
@@ -833,7 +899,9 @@ async function main() {
           ? ` [Since his last turn you also did these directly, and needn't mention them unless asked: ${didDirectly.join("; ")}.]`
           : "";
         didDirectly = [];
-        core.send(`[It is ${timeNow()}.]${tag ? ` ${tag}` : ""}${going}${did} ${text}`, { spoken: true });
+        const over = overHer ? ` ${overHer}` : "";
+        overHer = null;
+        core.send(`[It is ${timeNow()}.]${tag ? ` ${tag}` : ""}${going}${did}${over} ${text}`, { spoken: true });
       });
     };
 
@@ -873,6 +941,7 @@ async function main() {
       tell(said);
       if (!speakingAloud) return;
       listener.hold();
+      if (hearing) barge?.arm();
       voice.say(said);
       void Promise.resolve(speaker.drain?.())
         .catch(() => {})
@@ -884,6 +953,7 @@ async function main() {
     const listener = startWakeListener({
       device,
       detector,
+      ...(canceller ? { onRaw: (pcm: Buffer) => canceller.push(pcm) } : {}),
       ...(judge
         ? { turn: { judge: judge.judge, threshold: TURN_THRESHOLD, act: TURN_MODE === "on", onNote: noteTurn } }
         : {}),
@@ -1149,6 +1219,7 @@ async function main() {
     );
     stopListening = () => {
       judge?.stop();
+      canceller?.stop();
       known?.stop();
       detector?.stop();
       listener.stop();

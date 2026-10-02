@@ -227,6 +227,14 @@ export const CUT_OFF =
   "was longer than it needed to be. Answer this one in one sentence.]";
 
 /**
+ * He talked before she had said anything: not cutting her off, still asking.
+ * The turn she was about to answer was stopped, so this is the rest of it.
+ */
+export const CARRIED_ON =
+  "[He carried on before you had answered, and that turn was stopped. Take " +
+  "this together with what he said just before, and answer both as one.]";
+
+/**
  * What a shown page may do: draw itself, run its own script, and nothing else.
  *
  * The screen renders agent-written HTML with scripting on, and some of what

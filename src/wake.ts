@@ -541,8 +541,16 @@ export interface WakeListener {
    * own name in it, and answers it.
    */
   hold: () => void;
-  /** Hear again, and restart the follow-up window from now. */
-  resume: () => void;
+  /**
+   * Hear again, and restart the follow-up window from now.
+   *
+   * `lead` is what he has already said, for when he talked over her: it goes
+   * into the gate first, so the sentence keeps its opening words. Only a
+   * microphone that was actually shut starts over. Called again while it is
+   * open, as the reply he interrupted finishes in the background, it must
+   * not wipe the sentence he is in the middle of.
+   */
+  resume: (lead?: Buffer) => void;
   /**
    * Open a conversation without her name: the next thing he says is hers, as
    * if he had said "Hey Vela" and stopped. For him pressing her on screen.
@@ -657,6 +665,12 @@ export interface WakeOptions {
    * why.
    */
   onAudio?: (pcm: Buffer) => void;
+  /**
+   * Every chunk off the microphone, including while she holds it. For the
+   * echo canceller, which has to keep hearing the room while she talks: that
+   * is the whole of its job.
+   */
+  onRaw?: (pcm: Buffer) => void;
   words?: string[];
   /**
    * Whether the name has to arrive with a word in front of it.
@@ -1292,6 +1306,7 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
       spawn: opts.spawn,
       onAudio: (chunk) => {
         listenForDeath(chunk);
+        opts.onRaw?.(chunk);
         if (held) return;
         opts.onAudio?.(chunk);
         segmenter.push(chunk);
@@ -1332,9 +1347,13 @@ export function startWakeListener(opts: WakeOptions): WakeListener {
       pending = null;
     },
 
-    resume() {
+    resume(lead) {
+      const was = held;
       held = false;
-      segmenter.reset();
+      if (was) {
+        segmenter.reset();
+        if (lead?.length) segmenter.push(lead);
+      }
       // She has been talking for however long that took. The window he has to
       // reply in starts when she stops, not when she started.
       if (followOwed) followUntil = now() + followUpMs;

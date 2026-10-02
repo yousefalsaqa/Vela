@@ -603,6 +603,8 @@ describe("startWakeListener", () => {
     pauseMs?: number;
     /** Guess at each pause whether he has finished. See src/turn.ts. */
     turn?: { judge: (pcm: Buffer) => Promise<number | null>; act?: boolean };
+    /** Every chunk off the microphone, held or not. */
+    onRaw?: (pcm: Buffer) => void;
   } = {}) {
     const fake = fakeSpawner();
     const commands: string[] = [];
@@ -628,6 +630,7 @@ describe("startWakeListener", () => {
       followUpMs: opts.followUpMs,
       ...(opts.followUps === undefined ? {} : { followUps: opts.followUps }),
       ...(opts.now ? { now: opts.now } : {}),
+      ...(opts.onRaw ? { onRaw: opts.onRaw } : {}),
       ...(opts.turn
         ? { turn: { judge: opts.turn.judge, threshold: 0.5, act: opts.turn.act ?? false, onNote: (n: TurnNote) => notes.push(n) } }
         : {}),
@@ -1458,6 +1461,46 @@ describe("startWakeListener", () => {
     await settle();
     await settle();
     assert.equal(fake.spawned.length, 1, "a listener that reopens on its own shutdown never shuts down");
+  });
+
+  describe("hearing him over her", () => {
+    test("every chunk reaches the echo canceller, including while she holds the microphone", async () => {
+      // Holding is for her ears; the canceller has to keep hearing the room
+      // while she talks, which is the whole of its job.
+      const raw: Buffer[] = [];
+      const { wake, play } = listener({ onRaw: (pcm) => raw.push(pcm) });
+      wake.hold();
+      await play(voice(100));
+      assert.equal(Buffer.concat(raw).length, voice(100).length);
+      wake.stop();
+    });
+
+    test("resumed with what he already said, his sentence keeps its first words", async () => {
+      const { wake, commands, heard, play } = listener({ transcripts: ["Vela, stop, I meant the other one"] });
+      await play(room(200));
+      wake.hold();
+      const lead = Buffer.concat([room(20), voice(100)]);
+      wake.resume(lead);
+      await play(Buffer.concat([voice(100), room(200)]));
+      await until(() => commands.length === 1, "his sentence");
+      assert.ok(heard[0].length >= lead.length + voice(100).length, "the words that stopped her must be in what whisper reads");
+      wake.stop();
+    });
+
+    test("resuming while it's already listening doesn't wipe the sentence he's in the middle of", async () => {
+      // After he talks over her, the reply he cut off still finishes in the
+      // background and asks for the microphone back. It is already open, and
+      // starting it over would throw away what he is saying.
+      const { wake, commands, heard, play } = listener({ transcripts: ["Vela, the whole of it"] });
+      await play(Buffer.concat([room(200), voice(100)]));
+      wake.resume();
+      await play(Buffer.concat([voice(100), room(200)]));
+      await until(() => commands.length === 1, "his sentence");
+      // The fake whisper reads any audio as the sentence, so the audio is the
+      // evidence: both halves of what he said must be in it.
+      assert.ok(heard[0].length >= voice(200).length, "the first half was thrown away");
+      wake.stop();
+    });
   });
 
   describe("knowing when he has finished", () => {
