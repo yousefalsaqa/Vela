@@ -771,6 +771,19 @@ export class Tv {
     });
   }
 
+  /**
+   * Is it on, screensaver included? For a bare "pause" that could as easily
+   * be about the laptop: only a TV that is on gets it. Never wakes it.
+   */
+  async isOn(): Promise<boolean> {
+    const said = await this.serially(async () => {
+      if (await this.reach(false)) return "off";
+      const wake = await this.wakefulness();
+      return wake === "Awake" || wake === "Dreaming" ? "on" : "off";
+    });
+    return said === "on";
+  }
+
   /** On or off, what's in front, the volume, Netflix's position, and the last show. */
   status(): Promise<string> {
     return this.serially(async () => {

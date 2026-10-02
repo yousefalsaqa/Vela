@@ -1130,6 +1130,20 @@ zero. If nothing plays by 45 seconds she says so and stops pressing.
 If the router ever moves the TV, she finds it again by the name it answers
 AirPlay's `/info` with, and only sweeps for it when it has to be on.
 
+**Short commands skip the model.** In his first session "can you pause it?"
+took 4.0s before she said anything: the model deciding to use the tool, the
+TV doing it, and the model again to talk about it. And he asked her not to
+narrate it. So [shortcuts.ts](src/shortcuts.ts) recognises a whole, short TV
+command in whisper's text ("pause it", "turn it up a bit", "mute", "turn off
+the TV", "resume my show"), does it directly, and stays quiet when it worked:
+the TV doing it is the answer. When it didn't, she says why. Only the whole
+utterance counts, politeness aside; "pause it, I want to ask you something"
+goes to the model as before, because a wrong shortcut does something to his TV
+he didn't ask for. A bare "pause" or "play" could be Spotify, so it is only
+taken when the TV is on. The model is told what she did on his next turn, so
+it isn't a secret from her. `VELA_TV_SHORTCUTS=off` sends everything to the
+model.
+
 ## Browser history
 
 [history.ts](src/history.ts) reads Chrome, Edge and Brave history — all SQLite,
@@ -1239,6 +1253,7 @@ src/
   voices.ts    Who is talking: voiceprints, matching, and the rules for saving one
   tv.ts        The living-room TV over adb: power, volume, apps, Netflix, Wake-on-LAN
   turn.ts      Whether he has finished talking: the words so far and how they ended
+  shortcuts.ts Short TV commands she does without the model
 tests/         Unit tests; tests/live/ needs VELA_LIVE=1
 data/
   vela.db      Memory (gitignored)

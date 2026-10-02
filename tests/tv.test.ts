@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Runner } from "../src/proc.js";
+import { worked, type TvIntent } from "../src/shortcuts.js";
 import {
   Tv,
   KEYS,
@@ -1004,5 +1005,54 @@ describe("one thing at a time", () => {
     const fake = fakeTv({ level: 10 });
     await Promise.all([fake.tv.volume({ to: 13 }), fake.tv.remote("pause")]);
     assert.deepEqual(fake.pressed(), [KEYS.volumeUp, KEYS.volumeUp, KEYS.volumeUp, REMOTE.pause]);
+  });
+});
+
+describe("isOn", () => {
+  test("on, and on its screensaver, both count as on", async () => {
+    assert.equal(await fakeTv().tv.isOn(), true);
+    assert.equal(await fakeTv({ wake: "Dreaming", focus: SCREENSAVER }).tv.isOn(), true);
+  });
+
+  test("asleep, or off the network, is off, and asking never wakes it", async () => {
+    // A bare "pause" asks this before deciding the TV is what he meant;
+    // turning the TV on to find out would be the TV coming on by itself.
+    const asleep = fakeTv({ wake: "Asleep", focus: null }, {}, { mac: MAC });
+    assert.equal(await asleep.tv.isOn(), false);
+    const gone = fakeTv({ onNetwork: false }, {}, { mac: MAC });
+    assert.equal(await gone.tv.isOn(), false);
+    assert.deepEqual([...asleep.woken, ...gone.woken], []);
+    assert.deepEqual([...asleep.pressed(), ...gone.pressed()], []);
+  });
+});
+
+describe("what the shortcuts take as done", () => {
+  // shortcuts.ts stays quiet on success and speaks on failure, by reading
+  // these sentences. Reworded here without it knowing, she would either go
+  // quiet on a failure or start narrating every pause.
+  test("every action's success, as this module says it, is read as success", async () => {
+    const fake = fakeTv({ level: 11 });
+    const done: [TvIntent, string][] = [
+      [{ kind: "remote", button: "pause" }, await fake.tv.remote("pause")],
+      [{ kind: "volume", by: 5 }, await fake.tv.volume({ by: 5 })],
+      [{ kind: "volume", to: 16 }, await fake.tv.volume({ to: 16 })],
+      [{ kind: "volume", mute: true }, await fake.tv.volume({ mute: true })],
+      [{ kind: "volume", mute: true }, await fake.tv.volume({ mute: true })],
+      [{ kind: "volume", mute: false }, await fake.tv.volume({ mute: false })],
+      [{ kind: "power", on: false }, await fake.tv.power(false)],
+      [{ kind: "power", on: false }, await fake.tv.power(false)],
+      [{ kind: "power", on: true }, await fake.tv.power(true)],
+    ];
+    const netflix = measuredNetflix(1369000);
+    done.push([{ kind: "resume" }, await netflix.tv.netflix()]);
+    for (const [intent, said] of done) assert.ok(worked(intent, said), `"${said}" read as a failure`);
+  });
+
+  test("and its failures are read as failures", async () => {
+    const off = fakeTv({ wake: "Asleep", focus: null });
+    assert.equal(worked({ kind: "remote", button: "pause" }, await off.tv.remote("pause")), false);
+    assert.equal(worked({ kind: "volume", by: 5 }, await off.tv.volume({ by: 5 })), false);
+    const refused = fakeTv({ approved: false, transports: new Map() });
+    assert.equal(worked({ kind: "power", on: true }, await refused.tv.power(true)), false);
   });
 });

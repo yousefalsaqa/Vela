@@ -18,8 +18,10 @@ import {
 } from "./listen.js";
 import { DATA_DIR } from "./paths.js";
 import { kokoroSynth, synthSpeaker, createVoice, speakable, PRONOUNCE_PHONEMES } from "./voice.js";
-import { startWakeListener, type WakeListener, type TurnNote } from "./wake.js";
+import { startWakeListener, type WakeListener, type TurnNote, type WakeTrigger } from "./wake.js";
 import { createTurnJudge } from "./turn.js";
+import { tv } from "./tv.js";
+import { tvIntent, couldBeLaptop, worked, didLine, type TvIntent } from "./shortcuts.js";
 import { openDetector, openSpotter, type WakeDetector } from "./detect.js";
 import { places } from "./places.js";
 import { createTiles } from "./tiles.js";
@@ -109,6 +111,7 @@ import {
   TURN_THRESHOLD,
   TURN_MODEL,
   TURN_WORKER,
+  TV_SHORTCUTS,
   WAKE_FILL_AFTER_MS,
   VOICEPRINT_MODEL,
   VOICEPRINT_WORKER,
@@ -794,6 +797,90 @@ async function main() {
       );
     };
 
+    const toModel = (text: string, woke: WakeTrigger, how: string) => {
+      listener.hold();
+      answering = true;
+      cutTurn = false;
+      clock = { cut: lastCut, heard: Date.now() };
+      // The turn's own end drains the player now, so the guess-timer that
+      // would have closed an unused one is not needed.
+      if (unused) clearTimeout(unused);
+      unused = null;
+      // Already expected at the close if the model fired in this one; a
+      // nameless follow-up only now, once it is known not to be a goodbye.
+      // Measured from the close either way, because that is when the
+      // silence he is sitting in began.
+      filler.expect(lastCut);
+      showHer();
+      // The hub plays what the core says. This reply is already going to be
+      // said out loud in the room, so tell it to stay quiet for this one.
+      server.announce({ type: "aloud", value: true });
+      // She has no clock. Asked the time, she ran a PowerShell command for
+      // it, which was three of the four seconds that turn took. Handed it
+      // with the question, she just answers. Who said it rides along too.
+      void voiceOf(woke.who).then((who) => {
+        const heard = voices ? ` · ${describe(who)}` : "";
+        console.log(`  \x1b[36myou ›\x1b[0m \x1b[90m(${how}${heard})\x1b[0m ${text}`);
+        // A stranger who spoke to her is one she may now be asked to save.
+        voices?.met(who);
+        const tag = voiceTag(who);
+        // He is going. Do what he asked, if anything, and do not ask him
+        // something back he will not be there to answer.
+        lastWord = woke.leaving;
+        const going = woke.leaving ? " [He is wrapping up after this: a few words, nothing asked back.]" : "";
+        // What she did on the TV without asking it, so it isn't a secret from her.
+        const did = didDirectly.length
+          ? ` [Since his last turn you also did these directly, and needn't mention them unless asked: ${didDirectly.join("; ")}.]`
+          : "";
+        didDirectly = [];
+        core.send(`[It is ${timeNow()}.]${tag ? ` ${tag}` : ""}${going}${did} ${text}`, { spoken: true });
+      });
+    };
+
+    /** TV actions she did on his word without the model, for its next turn. See src/shortcuts.ts. */
+    let didDirectly: string[] = [];
+
+    /**
+     * Do a short TV command directly, without the model.
+     *
+     * Quiet when it works, because the TV doing it is the answer, and he
+     * asked her not to narrate it. When it doesn't, she says why. A bare
+     * "pause" or "play" with the TV off is not hers to take: it goes to the
+     * model, which can tell Spotify from Netflix.
+     */
+    const onTheTv = async (text: string, woke: WakeTrigger, how: string, intent: TvIntent) => {
+      filler.reset();
+      const who = await voiceOf(woke.who);
+      if (couldBeLaptop(text, intent) && !(await tv().isOn())) {
+        toModel(text, woke, how);
+        return;
+      }
+      console.log(`  \x1b[36myou ›\x1b[0m \x1b[90m(${how}${voices ? ` · ${describe(who)}` : ""})\x1b[0m ${text}`);
+      voices?.met(who);
+      const started = Date.now();
+      const said = await (intent.kind === "remote"
+        ? tv().remote(intent.button)
+        : intent.kind === "volume"
+          ? tv().volume(intent)
+          : intent.kind === "power"
+            ? tv().power(intent.on)
+            : tv().netflix());
+      console.log(`  \x1b[90m(tv, directly: ${said} ${secs(Date.now() - started)})\x1b[0m`);
+      if (worked(intent, said)) {
+        didDirectly.push(didLine(intent));
+        return;
+      }
+      tell(said);
+      if (!speakingAloud) return;
+      listener.hold();
+      voice.say(said);
+      void Promise.resolve(speaker.drain?.())
+        .catch(() => {})
+        .then(() => {
+          if (!answering) listenAgain();
+        });
+    };
+
     const listener = startWakeListener({
       device,
       detector,
@@ -849,38 +936,12 @@ async function main() {
 
       onCommand: (text, woke) => {
         const how = woke.followUp ? "follow-up" : woke.word;
-        listener.hold();
-        answering = true;
-        cutTurn = false;
-        clock = { cut: lastCut, heard: Date.now() };
-        // The turn's own end drains the player now, so the guess-timer that
-        // would have closed an unused one is not needed.
-        if (unused) clearTimeout(unused);
-        unused = null;
-        // Already expected at the close if the model fired in this one; a
-        // nameless follow-up only now, once it is known not to be a goodbye.
-        // Measured from the close either way, because that is when the
-        // silence he is sitting in began.
-        filler.expect(lastCut);
-        showHer();
-        // The hub plays what the core says. This reply is already going to be
-        // said out loud in the room, so tell it to stay quiet for this one.
-        server.announce({ type: "aloud", value: true });
-        // She has no clock. Asked the time, she ran a PowerShell command for
-        // it, which was three of the four seconds that turn took. Handed it
-        // with the question, she just answers. Who said it rides along too.
-        void voiceOf(woke.who).then((who) => {
-          const heard = voices ? ` · ${describe(who)}` : "";
-          console.log(`  \x1b[36myou ›\x1b[0m \x1b[90m(${how}${heard})\x1b[0m ${text}`);
-          // A stranger who spoke to her is one she may now be asked to save.
-          voices?.met(who);
-          const tag = voiceTag(who);
-          // He is going. Do what he asked, if anything, and do not ask him
-          // something back he will not be there to answer.
-          lastWord = woke.leaving;
-          const going = woke.leaving ? " [He is wrapping up after this: a few words, nothing asked back.]" : "";
-          core.send(`[It is ${timeNow()}.]${tag ? ` ${tag}` : ""}${going} ${text}`, { spoken: true });
-        });
+        const intent = TV_SHORTCUTS && !woke.leaving ? tvIntent(text) : null;
+        if (intent) {
+          void onTheTv(text, woke, how, intent);
+          return;
+        }
+        toModel(text, woke, how);
       },
 
       // He said her name and nothing else. Answering that with a model turn

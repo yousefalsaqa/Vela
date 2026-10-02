@@ -456,6 +456,12 @@ export const KEEP_AUDIO = switchedOn(process.env.VELA_KEEP_AUDIO, false);
 export const TV_HOST = process.env.VELA_TV_HOST ?? "192.168.0.246";
 export const TV_NAME = process.env.VELA_TV_NAME ?? "yousef's Fire TV";
 export const TV_MAC = process.env.VELA_TV_MAC ?? "4C:49:29:B2:23:6D";
+/**
+ * Short TV commands done without the model: "pause", "turn it up a bit",
+ * "turn off the TV", "resume my show". See src/shortcuts.ts. On unless
+ * VELA_TV_SHORTCUTS=off, which sends everything to the model as before.
+ */
+export const TV_SHORTCUTS = switchedOn(process.env.VELA_TV_SHORTCUTS, true);
 export const ADB = process.env.VELA_ADB;
 
 /**
