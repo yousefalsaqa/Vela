@@ -115,7 +115,6 @@ import {
   TURN_WORKER,
   TV_SHORTCUTS,
   BARGE_ON,
-  BARGE_AT,
   AEC_PYTHON,
   AEC_WORKER,
   WAKE_FILL_AFTER_MS,
@@ -820,10 +819,10 @@ async function main() {
      * If she hadn't said anything yet he wasn't cutting her off, he was still
      * asking, and the model is told that instead of that it went on too long.
      */
-    const talkedOver = (lead: Buffer, who: Identity) => {
+    const talkedOver = (lead: Buffer, loudness: number) => {
       if (!answering) return;
       const spoke = Boolean(clock?.thought);
-      console.log(`  \x1b[90m(he talked over her${spoke ? "" : " before she answered"} · ${describe(who)})\x1b[0m`);
+      console.log(`  \x1b[90m(he talked over her${spoke ? "" : " before she answered"} · ${loudness.toFixed(0)} dBFS)\x1b[0m`);
       overHer = spoke ? CUT_OFF : CARRIED_ON;
       cutTurn = true;
       voice.stop();
@@ -836,27 +835,14 @@ async function main() {
 
     /**
      * Hearing him over her: the microphone with her echo cancelled, watched
-     * while she talks for a voice she knows. Only with voices on, since it is
-     * the voiceprint that tells him from the TV and from what is left of her.
-     * A barge-in clip is about 0.6s of speech, well under the 2s voices.ts
-     * needs before it refines anyone's print, so checking never moves his.
+     * while she talks for sound the canceller left alone. See src/barge.ts.
      */
-    barge =
-      BARGE_ON && voices && existsSync(AEC_PYTHON)
-        ? createBargeWatcher({
-            who: (pcm) => voices.listen(pcm),
-            threshold: BARGE_AT,
-            onBarge: talkedOver,
-            onChecked: (who, stops) => {
-              if (!stops) console.log(`  \x1b[90m(a voice while she talked, not his: ${describe(who)})\x1b[0m`);
-            },
-          })
-        : null;
+    barge = BARGE_ON && existsSync(AEC_PYTHON) ? createBargeWatcher({ onBarge: talkedOver }) : null;
     const canceller: Canceller | null = barge
       ? createCanceller({
           python: AEC_PYTHON,
           worker: AEC_WORKER,
-          onClean: (pcm) => barge?.push(pcm),
+          onClean: (clean, raw) => barge?.push(clean, raw),
           onReady: () => console.log(`  \x1b[90m(echo canceller ready: he can talk over her)\x1b[0m`),
           onProblem: (why) => console.log(`  \x1b[33mTalking over her:\x1b[0m ${why}`),
         })

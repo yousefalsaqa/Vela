@@ -1018,16 +1018,26 @@ while she talks, a brief -46 in the first half-second while it adapts.
 Offline, with her exact samples, it reached -75; a reference 100 to 400ms
 early made no difference.
 
-[barge.ts](src/barge.ts) listens to the cleaned microphone while she talks.
-Speech standing 12dB over the room for 0.3s is checked against the prints she
-knows: someone she knows, or a voice leaning towards one by `VELA_BARGE_AT`
-(0.3; his own half-second clips scored 0.34 to 0.46), stops her. The TV and
-what is left of her lean towards no one. Stopping is the hub's cut (the rest
-unspoken, the buffer dropped, the sentence sounding ended) plus the model's
-turn interrupted, so his next turn isn't queued behind a long reply. What he
-said from just before he started goes into her ears first, so the sentence
-keeps its opening words, and the model is told he cut her off, or, if she
-hadn't said anything yet, that he was still asking. Only the barge watcher
+[barge.ts](src/barge.ts) listens to the cleaned microphone while she talks, and
+what the canceller did to each moment says whose sound it was. His voice it
+leaves alone: over sixteen real interruptions, cleaned audio within 0 to 5dB
+of the raw, at -28 to -38 dBFS. Her echo it takes 6 to 9dB and more off even
+while it adapts. A TV across the room it leaves alone too, but it is quieter
+at the laptop. So she stops for 0.3s of sound the canceller took under 8dB
+off, louder than -45 dBFS (the wake gate's own bar), allowing breaths. That
+was tuned by replaying a real recording of her talking with him quiet (never
+stopped, at any setting tried) and one of him talking over her (stopped half
+a second after his first words); both are test fixtures now. It began as a
+voiceprint check, and his own voice scored 0.00 to 0.30 on those same
+interruptions, because talking over someone isn't the voice his print was
+taken from.
+
+Stopping is the hub's cut (the rest unspoken, the buffer dropped, the
+sentence sounding ended) plus the model's turn interrupted, so his next turn
+isn't queued behind a long reply. What he said from just before he started
+goes into her ears first, so the sentence keeps its opening words, and the
+model is told he cut her off, or, if she hadn't said anything yet, that he
+was still asking. Only the barge watcher
 hears the cleaned stream; the wake word and whisper keep the microphone they
 were tuned on.
 

@@ -510,13 +510,10 @@ export const TURN_WORKER = resolve(here, "../scripts/turn_worker.py");
  * Hearing him over her. See src/echo.ts and src/barge.ts.
  *
  * The echo canceller runs in its own venv: uv venv ~/.vela-aec, then
- * uv pip install --python ~/.vela-aec livekit numpy soundcard. Without it,
- * or with voices off, she keeps shutting her ears while she talks, as before.
- * VELA_BARGE_AT is how far a voice must lean towards someone she knows to
- * stop her; his short clips scored 0.34 to 0.46.
+ * uv pip install --python ~/.vela-aec livekit numpy soundcard. Without it
+ * she keeps shutting her ears while she talks, as before.
  */
 export const BARGE_ON = switchedOn(process.env.VELA_BARGE, true);
-export const BARGE_AT = Number(process.env.VELA_BARGE_AT ?? "0.3");
 export const AEC_PYTHON =
   process.env.VELA_AEC_PYTHON ?? join(process.env.USERPROFILE ?? "", ".vela-aec", "Scripts", "python.exe");
 export const AEC_WORKER = resolve(here, "../scripts/aec_worker.py");

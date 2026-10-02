@@ -4,14 +4,14 @@ import { createCanceller } from "../src/echo.js";
 import { fakeSpawner, settle } from "./helpers/proc.js";
 
 function canceller() {
-  const cleaned: Buffer[] = [];
+  const cleaned: { clean: Buffer; raw: Buffer }[] = [];
   const problems: string[] = [];
   let ready = 0;
   const fake = fakeSpawner();
   const c = createCanceller({
     python: "python.exe",
     worker: "aec_worker.py",
-    onClean: (pcm) => cleaned.push(pcm),
+    onClean: (clean, raw) => cleaned.push({ clean, raw }),
     onReady: () => ready++,
     onProblem: (why) => problems.push(why),
     spawn: fake.spawn,
@@ -20,6 +20,26 @@ function canceller() {
 }
 
 describe("createCanceller", () => {
+  test("each cleaned chunk comes with the raw audio it was made from, however the worker splits it", async () => {
+    // The barge watcher reads what the canceller took off, so a cleaned chunk
+    // paired with the wrong raw one would make her own echo look like him.
+    const { c, fake, cleaned } = canceller();
+    c.push(Buffer.from([1, 0, 2, 0]));
+    c.push(Buffer.from([3, 0, 4, 0, 5, 0]));
+    fake.last().proc.stdout.write(Buffer.from([10, 0, 20, 0, 30, 0]));
+    await settle();
+    fake.last().proc.stdout.write(Buffer.from([40, 0, 50, 0]));
+    await settle();
+    assert.deepEqual(
+      cleaned.map((c) => [...c.raw]),
+      [
+        [1, 0, 2, 0, 3, 0],
+        [4, 0, 5, 0],
+      ],
+    );
+    c.stop();
+  });
+
   test("the microphone goes in as it is and comes back as the worker cleaned it", async () => {
     const { c, fake, cleaned } = canceller();
     const mic = Buffer.from([1, 0, 2, 0]);
@@ -27,7 +47,7 @@ describe("createCanceller", () => {
     assert.deepEqual(fake.last().proc.written, mic);
     fake.last().proc.stdout.write(Buffer.from([9, 0, 9, 0]));
     await settle();
-    assert.deepEqual(cleaned, [Buffer.from([9, 0, 9, 0])]);
+    assert.deepEqual(cleaned, [{ clean: Buffer.from([9, 0, 9, 0]), raw: mic }]);
     c.stop();
   });
 

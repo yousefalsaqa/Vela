@@ -23,8 +23,12 @@ export interface Canceller {
 export function createCanceller(opts: {
   python: string;
   worker: string;
-  /** Cleaned audio, 10ms out for every 10ms in. */
-  onClean: (pcm: Buffer) => void;
+  /**
+   * Cleaned audio, 10ms out for every 10ms in, with the raw audio it was
+   * cleaned from: what the canceller took off is how the barge watcher tells
+   * him from her.
+   */
+  onClean: (clean: Buffer, raw: Buffer) => void;
   /** Both of its streams are open, so what comes out from here is cleaned. */
   onReady?: () => void;
   onProblem?: (why: string) => void;
@@ -52,7 +56,14 @@ export function createCanceller(opts: {
     gone = true;
     if (!stopped) complain("the echo canceller stopped, so she can't hear him over her until she restarts");
   });
-  worker.stdout?.on("data", (pcm: Buffer) => opts.onClean(pcm));
+  // The worker answers every 10ms frame with one, in order, so the raw audio
+  // each cleaned chunk came from is the same number of bytes off the front.
+  let unanswered: Buffer = Buffer.alloc(0);
+  worker.stdout?.on("data", (clean: Buffer) => {
+    const raw = unanswered.subarray(0, clean.length);
+    unanswered = Buffer.from(unanswered.subarray(clean.length));
+    opts.onClean(clean, raw);
+  });
   let said = "";
   worker.stderr?.setEncoding("utf8");
   worker.stderr?.on("data", (chunk: string) => {
@@ -72,6 +83,7 @@ export function createCanceller(opts: {
   return {
     push(pcm) {
       if (stopped || gone || !worker.stdin?.writable) return;
+      unanswered = unanswered.length ? Buffer.concat([unanswered, pcm]) : pcm;
       worker.stdin.write(pcm);
     },
     stop() {
