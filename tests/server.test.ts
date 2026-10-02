@@ -14,7 +14,6 @@ import {
   type ServableCore,
   type RoomControls,
 } from "../src/server.js";
-import { TILE_HOST } from "../src/tiles.js";
 import { connect, reachable, parseFrames } from "../src/client.js";
 import type { CoreEvent } from "../src/core.js";
 import { present, clear as clearScreen, type Screen } from "../src/screen.js";
@@ -1364,12 +1363,12 @@ describe("the live map", () => {
     running = await serve({ core: fakeCore().core, endpointFile: join(dir, "server.json"), map });
   });
 
-  test("the screen may load map tiles from one host, and still reach nothing else", () => {
-    // An image URL can carry data out, so the tile host is the only image
-    // host, and fetch stays shut: the page learns its state from the hub.
-    assert.match(SCREEN_CSP, new RegExp(`img-src data: blob: ${TILE_HOST.replace(/[.*]/g, "\$&")};`));
-    assert.equal(TILE_HOST, "https://tile.openstreetmap.org");
-    assert.match(SCREEN_CSP, /connect-src 'none'/);
+  test("the screen's images and stylesheet come from her own server, never another host", () => {
+    // An image URL can carry data out. Map tiles used to come from
+    // OpenStreetMap directly, until it blocked the sandboxed frame; she
+    // fetches them herself now (src/tiles.ts), so no outside host is needed.
+    assert.match(SCREEN_CSP, /img-src 'self' data: blob:;/);
+    assert.doesNotMatch(SCREEN_CSP, /img-src[^;]*https?:/, "an outside image host is a way out");
     assert.match(SCREEN_CSP, /style-src 'self' 'unsafe-inline'/, "'self' is what lets /leaflet.css load");
   });
 });
