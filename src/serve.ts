@@ -3,7 +3,7 @@ import { createVoices, openVoiceprinter, useVoices, voiceTag, describe, type Ide
 import { createCore } from "./core.js";
 import { serve, readEndpoint, hubUrl, CUT_OFF, CARRIED_ON, type RoomControls } from "./server.js";
 import { createCanceller, type Canceller } from "./echo.js";
-import { createBargeWatcher, type BargeWatcher } from "./barge.js";
+import { createBargeWatcher, type BargeWatcher, type ArmedStretch } from "./barge.js";
 import { reachable } from "./client.js";
 import { spawn } from "./proc.js";
 import {
@@ -843,12 +843,51 @@ async function main() {
      * Hearing him over her: the microphone with her echo cancelled, watched
      * while she talks for sound the canceller left alone. See src/barge.ts.
      */
-    barge = BARGE_ON && existsSync(AEC_PYTHON) ? createBargeWatcher({ onBarge: talkedOver }) : null;
+    /**
+     * What she heard while she talked, kept for the last few replies as
+     * data/barge/<when>-raw.wav and -clean.wav. A stop that should have
+     * happened and didn't is invisible otherwise, and replaying the real
+     * audio through the rule is how the rule was tuned in the first place.
+     */
+    const bargeDir = join(DATA_DIR, "barge");
+    let heardRaw: Buffer[] = [];
+    let heardClean: Buffer[] = [];
+    const keepStretch = (stretch: ArmedStretch) => {
+      const raw = Buffer.concat(heardRaw);
+      const clean = Buffer.concat(heardClean);
+      heardRaw = [];
+      heardClean = [];
+      const loud = Number.isFinite(stretch.loudestDb)
+        ? `loudest ${stretch.loudestDb.toFixed(0)} dBFS, ${stretch.tookOffDb.toFixed(0)}dB taken off it`
+        : "nothing heard";
+      if (!stretch.stopped) {
+        console.log(
+          `  [90m(listened over her ${secs(stretch.ms)}: ${loud}, ${(stretch.himMs / 1000).toFixed(1)}s like him, not stopped)[0m`,
+        );
+      }
+      try {
+        mkdirSync(bargeDir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        writeFileSync(join(bargeDir, `${stamp}-${stretch.stopped ? "stopped" : "spoke-on"}-raw.wav`), wavFromPcm(raw));
+        writeFileSync(join(bargeDir, `${stamp}-${stretch.stopped ? "stopped" : "spoke-on"}-clean.wav`), wavFromPcm(clean));
+        const all = readdirSync(bargeDir).sort();
+        for (const old of all.slice(0, Math.max(0, all.length - 16))) rmSync(join(bargeDir, old), { force: true });
+      } catch {
+        /* diagnostics must never cost her the turn */
+      }
+    };
+    barge = BARGE_ON && existsSync(AEC_PYTHON) ? createBargeWatcher({ onBarge: talkedOver, onStretch: keepStretch }) : null;
     const canceller: Canceller | null = barge
       ? createCanceller({
           python: AEC_PYTHON,
           worker: AEC_WORKER,
-          onClean: (clean, raw) => barge?.push(clean, raw),
+          onClean: (clean, raw) => {
+            if (barge?.armed()) {
+              heardClean.push(clean);
+              heardRaw.push(raw);
+            }
+            barge?.push(clean, raw);
+          },
           onReady: () => console.log(`  \x1b[90m(echo canceller ready: he can talk over her)\x1b[0m`),
           onProblem: (why) => console.log(`  \x1b[33mTalking over her:\x1b[0m ${why}`),
         })

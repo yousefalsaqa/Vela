@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createBargeWatcher, isHim } from "../src/barge.js";
+import { createBargeWatcher, isHim, type ArmedStretch } from "../src/barge.js";
 import { SAMPLE_RATE } from "../src/listen.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -130,6 +130,31 @@ describe("createBargeWatcher", () => {
     const h = him(400);
     for (let at = 0; at < h.raw.length; at += 333) w.push(h.clean.subarray(at, at + 333), h.raw.subarray(at, at + 333));
     assert.equal(stops.length, 1);
+  });
+
+  test("each stretch she talked through is reported, so a stop that didn't happen can be explained", () => {
+    // "He wasn't loud enough" and "it wasn't listening" look identical from
+    // the room; the loudest thing it heard, and what the canceller took off
+    // it, tell them apart.
+    const stretches: ArmedStretch[] = [];
+    const w = createBargeWatcher({ onBarge: () => {}, onStretch: (s) => stretches.push(s) });
+    const r = room(1_000);
+    w.push(r.clean, r.raw);
+    w.arm();
+    for (const p of [her(1_000), farTv(500)]) w.push(p.clean, p.raw);
+    w.disarm();
+    assert.equal(stretches.length, 1);
+    assert.equal(stretches[0].stopped, false);
+    assert.equal(stretches[0].ms, 1_500);
+    assert.ok(Math.abs(stretches[0].loudestDb - -48) < 1, `loudest ${stretches[0].loudestDb}`);
+    assert.equal(stretches[0].himMs, 0);
+    w.arm();
+    const h = him(400);
+    w.push(h.clean, h.raw);
+    assert.equal(stretches.length, 2);
+    assert.equal(stretches[1].stopped, true);
+    w.disarm();
+    assert.equal(stretches.length, 2, "a stretch that ended in a stop isn't reported twice");
   });
 
   describe("on his real recordings", () => {

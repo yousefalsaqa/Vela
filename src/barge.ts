@@ -52,9 +52,26 @@ export function isHim(
   return cleanDb > floorDb + rule.marginDb && cleanDb > rule.minDb && rawDb - cleanDb < rule.cancelledDb;
 }
 
+/**
+ * What one stretch of her talking sounded like to the watcher, from arm to
+ * disarm or stop. Diagnostics: a stop that didn't happen is otherwise
+ * invisible, and "he wasn't loud enough" and "it wasn't armed" look the same.
+ */
+export interface ArmedStretch {
+  ms: number;
+  /** The loudest moment of cleaned audio, and how much the canceller had taken off it. */
+  loudestDb: number;
+  tookOffDb: number;
+  /** How long, all told, sounded like him. */
+  himMs: number;
+  stopped: boolean;
+}
+
 export function createBargeWatcher(opts: {
   /** He talked over her. `lead` is everything from just before he started to now, cleaned. */
   onBarge: (lead: Buffer, loudness: number) => void;
+  /** Each stretch she was being listened over, once it ends. See ArmedStretch. */
+  onStretch?: (stretch: ArmedStretch) => void;
   /** How far over the room the cleaned sound must be. */
   marginDb?: number;
   /** How loud it must be at all: someone at the laptop, not across the room. */
@@ -88,6 +105,13 @@ export function createBargeWatcher(opts: {
   let loud = 0;
   let gap = 0;
   let peak = -Infinity;
+  let stretch: ArmedStretch | null = null;
+  const endStretch = (stopped: boolean) => {
+    if (!stretch) return;
+    const done = { ...stretch, stopped };
+    stretch = null;
+    opts.onStretch?.(done);
+  };
 
   const drop = () => {
     burst = null;
@@ -102,7 +126,16 @@ export function createBargeWatcher(opts: {
 
   const frame = (clean: Buffer, raw: Buffer) => {
     const c = db(clean);
-    const him = !Number.isNaN(floor) && isHim(c, db(raw), floor, rule);
+    const r = db(raw);
+    const him = !Number.isNaN(floor) && isHim(c, r, floor, rule);
+    if (armed && stretch) {
+      stretch.ms += frameMs;
+      if (c > stretch.loudestDb) {
+        stretch.loudestDb = c;
+        stretch.tookOffDb = r - c;
+      }
+      if (him) stretch.himMs += frameMs;
+    }
     // The room is learned only between bursts, the way the gate learns it:
     // a sentence must not teach it that his voice is the room.
     if (!burst) floor = Number.isNaN(floor) ? c : c < floor ? floor + 0.4 * (c - floor) : floor + 0.02 * (c - floor);
@@ -133,17 +166,20 @@ export function createBargeWatcher(opts: {
       armed = false;
       drop();
       ring = [];
+      endStretch(true);
       opts.onBarge(lead, loudness);
     }
   };
 
   return {
     arm() {
+      if (!armed) stretch = { ms: 0, loudestDb: -Infinity, tookOffDb: 0, himMs: 0, stopped: false };
       armed = true;
       drop();
       ring = [];
     },
     disarm() {
+      if (armed) endStretch(false);
       armed = false;
       drop();
     },
