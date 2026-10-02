@@ -133,6 +133,8 @@ interface Scene {
   transports: Map<string, Transport>;
   /** Where the TV is: the router can move it. */
   hosts: string[];
+  /** A dial adb says worked, that leaves a transport it then calls offline. */
+  dialsDead?: boolean;
   wake: Wakefulness;
   focus: string | null;
   level: number;
@@ -267,7 +269,7 @@ function fakeTv(
         scene.transports.set(serial, "unauthorized");
         return out(`failed to authenticate to ${serial}\n`);
       }
-      scene.transports.set(serial, "device");
+      scene.transports.set(serial, scene.dialsDead ? "offline" : "device");
       return out(`connected to ${serial}\n`);
     }
     if (first === "disconnect") {
@@ -371,6 +373,10 @@ describe("parseVolume", () => {
     assert.equal(parseVolume(audioDump(11, 100, true))?.muted, true);
   });
 
+  test("is null when the music stream has no maximum to measure against", () => {
+    assert.equal(parseVolume(["- STREAM_MUSIC:", "   Muted: false", "   streamVolume:11"].join("\n")), null);
+  });
+
   test("is null without a music stream", () => {
     assert.equal(parseVolume("- STREAM_ALARM:\n   Max: 7\n   streamVolume:6"), null);
   });
@@ -382,6 +388,16 @@ describe("parsePlayback", () => {
       state: 2,
       positionMs: 1384609,
     });
+  });
+
+  test("is null for a session that reports no state, rather than reading the next one's", () => {
+    const dump = [
+      "      package=com.netflix.ninja",
+      "      active=false",
+      "      package=com.spotify.tv.android",
+      "      state=PlaybackState {state=3, position=95000}",
+    ].join("\n");
+    assert.equal(parsePlayback(dump, NETFLIX), null);
   });
 
   test("is null when the app has no session, rather than borrowing the next one's", () => {
@@ -666,6 +682,13 @@ describe("reaching the TV", () => {
     assert.ok(verbs.includes("disconnect") && verbs.indexOf("disconnect") < verbs.indexOf("connect"));
   });
 
+  test("a link that dials but stays offline is said to be unreachable, not used", async () => {
+    // adb can say "connected" and still hold a dead transport; only get-state
+    // after the dial says whether there is anything there.
+    const fake = fakeTv({ transports: new Map(), dialsDead: true });
+    assert.equal(await fake.tv.power(true), "The TV is on the network, but adb can't get through to it (192.168.0.246).");
+  });
+
   test("a working link is used as it is, with no dialling at all", async () => {
     const fake = fakeTv();
     await fake.tv.power(true);
@@ -805,6 +828,12 @@ describe("volume", () => {
     assert.deepEqual(fake.pressed(), []);
   });
 
+  test("unmute when it isn't muted says so, since the mute key would toggle it on", async () => {
+    const fake = fakeTv();
+    assert.equal(await fake.tv.volume({ mute: false }), "It isn't muted.");
+    assert.deepEqual(fake.pressed(), []);
+  });
+
   test("mutes, and unmutes back to where it was", async () => {
     const fake = fakeTv({ level: 15 });
     assert.equal(await fake.tv.volume({ mute: true }), "Muted.");
@@ -846,6 +875,11 @@ describe("open", () => {
     assert.equal(await fake.tv.open("Netflix"), "Netflix is open on the TV.");
     assert.deepEqual(fake.pressed(), [KEYS.wakeup], "anything past waking it would be choosing for him");
     assert.ok(!fake.shells().some((c) => c.startsWith("am start")), "no show link on a plain open");
+  });
+
+  test("an app she has no name for opens by its package, and is called that", async () => {
+    const fake = fakeTv({ installed: [...INSTALLED, "com.plexapp.android"] });
+    assert.equal(await fake.tv.open("plex"), "com.plexapp.android is open on the TV.");
   });
 
   test("an app the TV doesn't have is said, with what it does have", async () => {
@@ -994,6 +1028,11 @@ describe("status", () => {
     );
   });
 
+  test("Netflix paused is not reported as playing", async () => {
+    const fake = fakeTv({ focus: NETFLIX, netflix: { state: 2, positionMs: 1384609 } });
+    assert.equal(await fake.tv.status(), "The TV is on, showing Netflix. Volume 11 of 100.");
+  });
+
   test("the screensaver is called the screensaver, once", async () => {
     const fake = fakeTv({ wake: "Dreaming", focus: SCREENSAVER });
     assert.match(await fake.tv.status(), /^The TV is on, on its screensaver\. /);
@@ -1055,5 +1094,19 @@ describe("what the shortcuts take as done", () => {
     assert.equal(worked({ kind: "volume", by: 5 }, await off.tv.volume({ by: 5 })), false);
     const refused = fakeTv({ approved: false, transports: new Map() });
     assert.equal(worked({ kind: "power", on: true }, await refused.tv.power(true)), false);
+  });
+});
+
+describe("tv", () => {
+  test("is made once, on first use, and a test can hand in its own", async () => {
+    const { tv, useTv } = await import("../src/tv.js");
+    const fake = fakeTv();
+    useTv(fake.tv);
+    assert.equal(tv(), fake.tv);
+    useTv(null);
+    const made = tv();
+    assert.equal(tv(), made, "two asks, one TV: two would race each other's presses");
+    assert.equal(made.address, "192.168.0.246");
+    useTv(null);
   });
 });

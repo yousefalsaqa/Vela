@@ -99,6 +99,40 @@ describe("opening hours", () => {
     }
   });
 
+  test("a day open round the clock says so, while the week around it keeps its hours", () => {
+    const spec = "Mo-Fr 00:00-24:00; Sa,Su 10:00-18:00";
+    assert.equal(statusAt(spec, at(WED, 3)).label, "Open all day");
+    assert.equal(statusAt(spec, at(SAT, 12)).label, "Open · till 6 pm");
+  });
+
+  test("noon and midnight are said as words, not as 12 o'clock", () => {
+    assert.equal(statusAt("Mo-Su 08:00-12:00", at(WED, 9)).label, "Open · till noon");
+    assert.equal(statusAt("Mo-Su 18:00-24:00", at(WED, 19)).label, "Open · till midnight");
+  });
+
+  test("a week that is shut every day says closed, with no opening to promise", () => {
+    assert.deepEqual(statusAt("Mo-Su off", at(WED, 12)), { open: false, label: "Closed", today: "closed today" });
+  });
+
+  test("impossible or contradictory hours are unclear, not guessed at", () => {
+    // A map that says a place is open when it is shut is worse than one that
+    // shrugs, so anything that can't be read straight is "Hours unclear".
+    for (const spec of [
+      "Mo-Fr 25:00-26:00", // no such hour
+      "Mo-Fr 10:75-12:00", // no such minute
+      "Mo 10:00-12:00 off", // open and off in one rule
+      "Mo off 10:00-12:00",
+      "Mo-Fr 10:00-12:00; Sa", // days with nothing after them
+      "PH off", // holidays alone say nothing about an ordinary week
+    ]) {
+      assert.deepEqual(statusAt(spec, at(WED, 11)), { open: null, label: "Hours unclear" }, spec);
+    }
+  });
+
+  test("a holidays rule beside a week is ignored for the week, not taken as the week", () => {
+    assert.equal(statusAt("Mo-Fr 09:00-17:00; PH off", at(WED, 12)).label, "Open · till 5 pm");
+  });
+
   test("a bare time range is every day", () => {
     assert.deepEqual(parseHours("11:30-22:00")?.map((d) => d.length), [1, 1, 1, 1, 1, 1, 1]);
   });
@@ -537,5 +571,37 @@ describe("what she is told", () => {
     await map.view({ action: "focus", place: "1" });
     assert.equal(map.state()!.places.find((p) => p.id === map.state()!.focus)!.name, "Shut Sushi");
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("the edges of finding places", () => {
+  test("a place drawn as an outline goes on the map at its centre; one with no position or no name doesn't", () => {
+    const spots = spotsFrom([
+      { type: "way", id: 1, center: { lat: 44.23, lon: -76.49 }, tags: { name: "Outlined Café", amenity: "cafe" } },
+      { type: "node", id: 2, tags: { name: "Nowhere Diner", amenity: "restaurant" } },
+      { type: "node", id: 3, lat: 44.23, lon: -76.49, tags: { amenity: "restaurant" } },
+      { type: "node", id: 4, lat: 44.23, lon: -76.49, tags: { name: "   ", amenity: "bar" } },
+    ]);
+    assert.deepEqual(
+      spots.map((s) => [s.id, s.name, s.lat]),
+      [["way/1", "Outlined Café", 44.23]],
+      "a pin with no place to go, or no name to say, is a pin he can't use",
+    );
+  });
+
+  test("asking for 'something good to eat' narrows nothing, since none of it is a kind of food", () => {
+    const pizza = { id: "n/1", name: "Pizza Pizza", tags: { cuisine: "pizza" }, lat: 0, lon: 0 };
+    assert.equal(fits(pizza, "something good to eat"), true);
+    assert.equal(fits(pizza, "sushi"), false);
+    assert.equal(fits(pizza, "pizzas"), true, "a plural is the same food");
+  });
+
+  test("walking a street stops at its ends, and a repeated point doesn't stall the walk", () => {
+    const a = { lat: 44.23, lon: -76.49 };
+    const b = { lat: 44.24, lon: -76.49 };
+    assert.deepEqual(pointAt([a, b], -50), a, "before the start is the start");
+    assert.deepEqual(pointAt([a, b], 1e6), b, "past the end is the end");
+    const doubled = pointAt([a, a, b], 100);
+    assert.ok(doubled.lat > a.lat && doubled.lat < b.lat, "a zero-length step must not end the walk at its first point");
   });
 });
