@@ -36,6 +36,17 @@ describe("tvIntent", () => {
     ["Quieter.", { kind: "volume", by: -STEP.plain }],
     ["Volume down.", { kind: "volume", by: -STEP.plain }],
     ["Set the volume to 20.", { kind: "volume", to: 20 }],
+    // The ones he asked about, and the everyday ways to say the rest.
+    ["Raise the volume.", { kind: "volume", by: STEP.plain }],
+    ["Lower the volume a bit.", { kind: "volume", by: -STEP.little }],
+    ["Increase the volume.", { kind: "volume", by: STEP.plain }],
+    ["Decrease the volume.", { kind: "volume", by: -STEP.plain }],
+    ["Make it louder.", { kind: "volume", by: STEP.plain }],
+    ["Can you make it a bit quieter?", { kind: "volume", by: -STEP.little }],
+    ["Stop the show.", { kind: "remote", button: "pause" }],
+    ["Shut the TV off.", { kind: "power", on: false }],
+    ["Put my show on.", { kind: "resume" }],
+    ["Put the volume on 15.", { kind: "volume", to: 15 }],
   ];
   for (const [said, intent] of cases) {
     test(`"${said}"`, () => assert.deepEqual(tvIntent(said), intent));
@@ -50,6 +61,9 @@ describe("tvIntent", () => {
       "Turn it off.", // the laptop's music as easily as the TV
       "Turn off the lights.",
       "Resume the download.",
+      "Stop.", // could be her talking
+      "Stop it.",
+      "Continue.", // could be what she was saying
       "How are you?",
       "",
     ]) {

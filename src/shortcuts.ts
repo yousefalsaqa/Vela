@@ -45,27 +45,31 @@ const TV = "(?:the tv|tv|the telly|the television)";
 
 const RULES: { pattern: RegExp; intent: (m: RegExpMatchArray) => TvIntent }[] = [
   { pattern: new RegExp(`^pause(?: ${THING})?$`), intent: () => ({ kind: "remote", button: "pause" }) },
+  // "Stop" alone could be him telling her to stop talking; with the show named it can't.
+  { pattern: /^stop (?:the show|netflix|the episode|the movie|the film|the tv)$/, intent: () => ({ kind: "remote", button: "pause" }) },
   { pattern: new RegExp(`^(?:un ?pause|play|resume|keep playing|carry on playing)(?: ${THING})?$`), intent: () => ({ kind: "remote", button: "play" }) },
   {
-    pattern: new RegExp(`^(?:resume|continue|put on|play) (?:my show|my series|what i was watching|where i left off)(?: on ${TV})?$`),
+    pattern: new RegExp(
+      `^(?:(?:resume|continue|put on|play) (?:my show|my series|what i was watching|where i left off)|put (?:my show|my series|what i was watching) (?:back )?on)(?: on ${TV})?$`,
+    ),
     intent: () => ({ kind: "resume" }),
   },
-  { pattern: new RegExp(`^(?:turn (?:off ${TV}|${TV} off)|${TV} off|switch (?:off ${TV}|${TV} off))$`), intent: () => ({ kind: "power", on: false }) },
+  { pattern: new RegExp(`^(?:(?:turn|switch|shut) (?:off ${TV}|${TV} off)|shut down ${TV}|${TV} off)$`), intent: () => ({ kind: "power", on: false }) },
   { pattern: new RegExp(`^(?:turn (?:on ${TV}|${TV} on)|${TV} on|switch (?:on ${TV}|${TV} on))$`), intent: () => ({ kind: "power", on: true }) },
   { pattern: new RegExp(`^(?:mute|mute ${THING})$`), intent: () => ({ kind: "volume", mute: true }) },
   { pattern: new RegExp(`^(?:unmute|unmute ${THING})$`), intent: () => ({ kind: "volume", mute: false }) },
   {
-    pattern: /^(?:(?:set )?(?:the )?volume (?:to )?|(?:turn it|put it) (?:to|on) )(\d{1,3})$/,
+    pattern: /^(?:(?:set )?(?:the )?volume (?:to |on |at )?|(?:turn|put|set) (?:it|the volume) (?:to|on|at) )(\d{1,3})$/,
     intent: (m) => ({ kind: "volume", to: Number(m[1]) }),
   },
   {
     pattern: new RegExp(
-      `^(?:(a (?:little |tiny )?bit |a little |slightly )?(louder|quieter|softer)|turn (?:${THING}|the volume) (up|down)(?: (a (?:little |tiny )?bit|a little|slightly|a lot|loads))?|turn (up|down) (?:${THING}|the volume)(?: (a (?:little |tiny )?bit|a little|slightly|a lot))?|volume (up|down)|(way|much|a lot) (louder|quieter))$`,
+      `^(?:(?:make (?:it|the tv) )?(a (?:little |tiny )?bit |a little |slightly )?(louder|quieter|softer)|turn (?:${THING}|the volume) (up|down)(?: (a (?:little |tiny )?bit|a little|slightly|a lot|loads))?|turn (up|down) (?:${THING}|the volume)(?: (a (?:little |tiny )?bit|a little|slightly|a lot))?|volume (up|down)|(way|much|a lot) (louder|quieter)|(raise|increase|lower|decrease) (?:the volume|the tv|it)(?: (a (?:little |tiny )?bit|a little|slightly|a lot))?)$`,
     ),
     intent: (m) => {
-      const word = m[2] ?? m[3] ?? m[5] ?? m[7] ?? m[9];
-      const size = m[1] ?? m[4] ?? m[6] ?? m[8];
-      const up = word === "louder" || word === "up";
+      const word = m[2] ?? m[3] ?? m[5] ?? m[7] ?? m[9] ?? m[10];
+      const size = m[1] ?? m[4] ?? m[6] ?? m[8] ?? m[11];
+      const up = word === "louder" || word === "up" || word === "raise" || word === "increase";
       const step = !size ? STEP.plain : /lot|loads|way|much/.test(size) ? STEP.lot : STEP.little;
       return { kind: "volume", by: up ? step : -step };
     },
